@@ -14,7 +14,14 @@
     "db:generate": "prisma generate",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "db:reset": "prisma migrate reset --force"
+    "db:reset": "prisma migrate reset --force",
+    "model:setup": "python3 -m venv .venv && .venv/bin/pip install --upgrade pip && .venv/bin/pip install -r python/requirements.txt",
+    "model:history": "cd python && ../.venv/bin/python -m racingedge_model.synthetic.generate_history --reset",
+    "model:features": "cd python && ../.venv/bin/python -m racingedge_model.dataset",
+    "model:train": "cd python && ../.venv/bin/python -m racingedge_model.train",
+    "model:backtest": "cd python && ../.venv/bin/python -m racingedge_model.backtest",
+    "model:predict": "cd python && ../.venv/bin/python -m racingedge_model.predict",
+    "model:test": "cd python && ../.venv/bin/python -m pytest"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.9.1",

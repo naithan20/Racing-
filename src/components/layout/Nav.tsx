@@ -2,9 +2,11 @@ import Link from "next/link";
 
 const NAV_LINKS = [
   { href: "/races", label: "Races" },
+  { href: "/value", label: "Value Scanner" },
   { href: "/lucky15", label: "Lucky 15" },
   { href: "/results", label: "Results" },
   { href: "/dashboard", label: "Dashboard" },
+  { href: "/backtest", label: "Backtest Mode" },
   { href: "/import", label: "Import" },
 ];
 
@@ -30,7 +32,7 @@ export function Nav() {
           ))}
         </nav>
         <span className="ml-auto hidden shrink-0 text-xs text-text-muted sm:block">
-          Phase 1 — architecture build · sample data
+          Phase 2 — baseline model · synthetic data
         </span>
       </div>
     </header>

@@ -6,11 +6,14 @@ import { decimalToFractional } from "@/lib/odds";
 import { formatDate, formatDecimalOdds, formatDistance, formatNumber, formatPercent } from "@/lib/format";
 import { courseRecord, courseDistanceRecord, distanceRecord, goingRecord } from "@/lib/formAggregates";
 import { paceRoleLabel } from "@/pace/types";
+import { computeRunnerBadges, RUNNER_BADGE_LABELS } from "@/lib/badges";
+import { buildExplanation } from "@/lib/explain";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge, ConfidenceBadge, ValueEdgeBadge } from "@/components/ui/Badge";
 import { NotConfigured } from "@/components/ui/NotConfigured";
 import { OddsHistoryChart, type OddsPoint } from "@/components/runners/OddsHistoryChart";
 import { describePlaceBasis } from "@/value/place";
+import { SyntheticModelBanner } from "@/components/model/SyntheticModelBanner";
 
 function RecordRow({ label, summary }: { label: string; summary: { runs: number; wins: number; places: number; winPercentage: number | null; placePercentage: number | null } }) {
   return (
@@ -35,6 +38,7 @@ export default async function RunnerDetailPage({ params }: PageProps<"/runners/[
   const snapshot = runner.predictionSnapshots.find((s) => s.snapshotType === "PRE_RACE") ?? null;
   const evidence = runner.horse.evidenceProfile;
   const pace = runner.paceProfile;
+  const modelVersion = snapshot?.modelVersionRef ?? null;
 
   const oddsPoints: OddsPoint[] = runner.marketPrices.map((mp) => ({
     timestamp: mp.timestamp.toISOString(),
@@ -53,8 +57,57 @@ export default async function RunnerDetailPage({ params }: PageProps<"/runners/[
       ? runner.officialRating - formEntries[0].officialRating
       : null;
 
+  const badges = computeRunnerBadges({
+    valueEdgeAbsolute: snapshot?.valueEdgeAbsolute ?? null,
+    modelConfidence: snapshot?.modelConfidence ?? null,
+    evidenceDensityScore: evidence?.evidenceDensityScore ?? null,
+    paceCollapseProbability: pace?.paceCollapseProbability ?? null,
+    draw: runner.draw,
+    fieldSize: runner.race.numberOfRunners,
+  });
+
+  const siblingRunners = runner.race.runners.filter((r) => r.id !== runner.id);
+  const fieldAccelIndices = siblingRunners
+    .map((r) => r.paceProfile?.relativeAccelerationIndex)
+    .filter((v): v is number => v !== null && v !== undefined);
+  const fieldFinishSpeedIndices = siblingRunners
+    .map((r) => r.paceProfile?.finishingSpeedIndex)
+    .filter((v): v is number => v !== null && v !== undefined);
+  const fieldWeights = siblingRunners
+    .map((r) => r.weightLbsTotal)
+    .filter((v): v is number => v !== null && v !== undefined);
+
+  const bestRecentOfficialRating =
+    formEntries.length > 0
+      ? Math.max(...formEntries.slice(0, 5).map((f) => f.officialRating ?? -Infinity).filter((v) => v > -Infinity), -Infinity)
+      : -Infinity;
+
+  const explanation = buildExplanation({
+    recentFinishingPositions: formEntries.slice(0, 6).map((f) => ({ position: f.finishingPosition, fieldSize: f.fieldSize })),
+    courseRecord: cRecord,
+    distanceRecord: dRecord,
+    goingRecord: gRecord ?? { runs: 0, wins: 0, places: 0, winPercentage: null, placePercentage: null },
+    ratingMovement,
+    currentOfficialRating: runner.officialRating,
+    bestRecentOfficialRating: bestRecentOfficialRating > -Infinity ? bestRecentOfficialRating : null,
+    weightLbs: runner.weightLbsTotal,
+    fieldWeightsLbs: fieldWeights,
+    relativeAccelerationIndex: pace?.relativeAccelerationIndex ?? null,
+    fieldRelativeAccelerationIndices: fieldAccelIndices,
+    finishingSpeedIndex: pace?.finishingSpeedIndex ?? null,
+    fieldFinishingSpeedIndices: fieldFinishSpeedIndices,
+    firstTimeHeadgear: runner.firstTimeHeadgear,
+    evidenceDensityScore: evidence?.evidenceDensityScore ?? null,
+    careerStartsToDate: formEntries.length,
+    courseStartsToDate: cRecord.runs,
+    paceCollapseProbability: pace?.paceCollapseProbability ?? null,
+    projectedRole: pace?.projectedRole ?? null,
+  });
+
   return (
     <div className="flex flex-col gap-6">
+      {modelVersion?.isSynthetic && <SyntheticModelBanner />}
+
       <div>
         <div className="flex items-center gap-2 text-xs text-text-muted">
           <Link href="/races" className="hover:text-text-secondary">
@@ -73,6 +126,16 @@ export default async function RunnerDetailPage({ params }: PageProps<"/runners/[
           {runner.firstTimeHeadgear && <Badge tone="warning">First-time headgear</Badge>}
           {runner.nonRunner && <Badge tone="negative">Non-runner</Badge>}
           {evidence?.evidenceDensityLabel && <Badge>Evidence: {evidence.evidenceDensityLabel}</Badge>}
+          {badges.map((b) => (
+            <Badge key={b} tone={b === "LOW_CONFIDENCE" || b === "PACE_RISK" || b === "DRAW_RISK" ? "warning" : "positive"}>
+              {RUNNER_BADGE_LABELS[b]}
+            </Badge>
+          ))}
+          {modelVersion && (
+            <span className="ml-1 self-center text-xs text-text-muted">
+              model: {modelVersion.name} ({modelVersion.version})
+            </span>
+          )}
         </div>
       </div>
 
@@ -116,6 +179,20 @@ export default async function RunnerDetailPage({ params }: PageProps<"/runners/[
                 runner.race.numberOfRunners
               )}
             </p>
+            {snapshot && snapshot.placeProbabilityBands.length > 0 && (
+              <div className="mt-2 border-t border-border-subtle pt-2">
+                <p className="mb-1 text-xs text-text-muted">Place probability by depth</p>
+                <div className="flex flex-wrap gap-2">
+                  {[...snapshot.placeProbabilityBands]
+                    .sort((a, b) => a.topN - b.topN)
+                    .map((band) => (
+                      <span key={band.topN} className="rounded bg-bg-hover px-1.5 py-0.5 text-xs text-text-secondary">
+                        top{band.topN}: {formatPercent(band.probabilityCalibrated, 0)}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            )}
           </CardBody>
         </Card>
 
@@ -284,12 +361,56 @@ export default async function RunnerDetailPage({ params }: PageProps<"/runners/[
         <CardHeader>
           <CardTitle>Why the model likes / dislikes this horse</CardTitle>
         </CardHeader>
-        <CardBody>
-          <p className="text-sm text-text-muted">
-            No rule-based rationale has been generated yet — this section is intentionally left empty until
-            the Phase 2 model exists. It will be populated from concrete, traceable feature comparisons
-            (e.g. &quot;Course win % 32% vs field average 11%&quot;), never free-form generated text.
-          </p>
+        <CardBody className="flex flex-col gap-4">
+          {!snapshot || snapshot.winProbability === null ? (
+            <p className="text-sm text-text-muted">
+              No rule-based rationale has been generated yet — a model prediction is required first. It is
+              always derived from concrete, traceable feature comparisons, never free-form generated text.
+            </p>
+          ) : (
+            <>
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-positive">Positive factors</p>
+                {explanation.positiveFactors.length === 0 ? (
+                  <p className="text-sm text-text-muted">No notable positive factors identified.</p>
+                ) : (
+                  <ul className="list-inside list-disc space-y-1 text-sm text-text-secondary">
+                    {explanation.positiveFactors.map((f, i) => (
+                      <li key={i}>{f}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-negative">Negative factors</p>
+                {explanation.negativeFactors.length === 0 ? (
+                  <p className="text-sm text-text-muted">No notable negative factors identified.</p>
+                ) : (
+                  <ul className="list-inside list-disc space-y-1 text-sm text-text-secondary">
+                    {explanation.negativeFactors.map((f, i) => (
+                      <li key={i}>{f}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <div>
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-warning">Model uncertainty</p>
+                {explanation.modelUncertainty.length === 0 ? (
+                  <p className="text-sm text-text-muted">No specific uncertainty flags.</p>
+                ) : (
+                  <ul className="list-inside list-disc space-y-1 text-sm text-text-secondary">
+                    {explanation.modelUncertainty.map((f, i) => (
+                      <li key={i}>{f}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+              <p className="text-xs text-text-muted">
+                Model association / importance, not causal effect. Each statement above is generated from a
+                fixed threshold on a specific data field — see src/lib/explain.ts.
+              </p>
+            </>
+          )}
         </CardBody>
       </Card>
     </div>

@@ -12,6 +12,9 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Phase 2 Python modelling package + its virtualenv — not JS/TS.
+    ".venv/**",
+    "python/**",
   ]),
 ]);
 

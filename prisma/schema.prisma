@@ -552,7 +552,12 @@ model PredictionSnapshot {
   runnerId String
 
   snapshotType SnapshotType @default(PRE_RACE)
-  modelVersion String // e.g. "unconfigured" during Phase 1
+  modelVersion String // free-text label, e.g. "unconfigured" during Phase 1 — kept for backwards compatibility, prefer modelVersionRef
+
+  // Phase 2: the trained ModelVersion that produced this snapshot, if any.
+  // Nullable so Phase 1's "unconfigured" rows remain valid.
+  modelVersionRef ModelVersion? @relation(fields: [modelVersionId], references: [id])
+  modelVersionId  String?
 
   winProbability        Float? // null = "Model not yet configured"
   placeProbability      Float?
@@ -571,8 +576,81 @@ model PredictionSnapshot {
   isLocked  Boolean  @default(true) // immutability guard, see lib/results
   createdAt DateTime @default(now())
 
+  placeProbabilityBands PlaceProbabilityBand[]
+
   @@index([runnerId])
   @@index([snapshotType])
+  @@index([modelVersionId])
+}
+
+// ---------------------------------------------------------------------------
+// MODEL VERSIONING (Phase 2)
+//
+// Every trained model — baseline or otherwise — gets its own immutable
+// ModelVersion row. PredictionSnapshot rows reference the ModelVersion that
+// produced them, so predictions from different models/versions can always
+// be told apart and compared. Old versions are never overwritten; retraining
+// creates a new row.
+// ---------------------------------------------------------------------------
+
+model ModelVersion {
+  id      String @id @default(cuid())
+  name    String // e.g. "baseline-logistic-win", "baseline-lightgbm-win", "baseline-place-topN"
+  version String // e.g. "2026.08.13-1"
+
+  featureSetVersion String // matches racingedge_model FEATURE_SET_VERSION at training time
+  algorithm         String // e.g. "logistic_regression", "lightgbm", "place_top2".."place_top6"
+  hyperparameters   String // JSON-encoded
+  calibrationMethod String // "sigmoid" | "isotonic" | "none"
+
+  trainingStartDate   DateTime
+  trainingEndDate     DateTime
+  validationStartDate DateTime?
+  validationEndDate   DateTime?
+  testStartDate       DateTime?
+  testEndDate         DateTime?
+
+  trainingRowCount  Int
+  trainingRaceCount Int
+
+  // True if any race in the training window is synthetic sample data.
+  // Every UI surface must visibly flag predictions from such a model as
+  // SYNTHETIC TEST MODEL — NOT FOR BETTING USE.
+  isSynthetic Boolean @default(false)
+
+  // Summary metrics captured at training time (JSON) — a point-in-time
+  // record. The live dashboard recomputes metrics fresh from stored
+  // PredictionSnapshot + ResultEntry rows rather than trusting this blob,
+  // but it's kept for quick reference and for models whose snapshots have
+  // since been pruned.
+  metricsJson           String?
+  featureImportanceJson String? // JSON list of {feature, importance/coefficient}
+  artifactPath          String? // path to the saved joblib artifact(s), relative to python/
+  notes                 String?
+
+  createdAt DateTime @default(now())
+
+  predictionSnapshots PredictionSnapshot[]
+
+  @@unique([name, version])
+  @@index([algorithm])
+}
+
+// Raw + calibrated probability of finishing in the top N (N = 2..6),
+// alongside the primary PredictionSnapshot. Storing all five bands (rather
+// than only the one matching a single bookmaker) lets the UI pick the right
+// band for whichever bookmaker's place terms are selected without needing a
+// snapshot per bookmaker, and lets tests verify monotonicity directly.
+model PlaceProbabilityBand {
+  id                   String             @id @default(cuid())
+  snapshot             PredictionSnapshot @relation(fields: [predictionSnapshotId], references: [id], onDelete: Cascade)
+  predictionSnapshotId String
+
+  topN                  Int // 2..6, i.e. P(finish <= topN)
+  probabilityRaw        Float // before calibration
+  probabilityCalibrated Float // after calibration + monotonicity enforcement — this is what the UI should use
+
+  @@unique([predictionSnapshotId, topN])
 }
 
 // ---------------------------------------------------------------------------

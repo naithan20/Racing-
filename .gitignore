@@ -52,3 +52,12 @@ next-env.d.ts
 /.claude/
 /.windsurf/
 skills-lock.json
+
+# python modelling package (regenerate with: npm run model:train / model:backtest / model:predict)
+/.venv/
+python/.venv/
+__pycache__/
+*.pyc
+/python/artifacts/
+/python/reports/
+.pytest_cache/

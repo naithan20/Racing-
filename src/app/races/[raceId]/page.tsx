@@ -6,12 +6,21 @@ import { decimalToFractional } from "@/lib/odds";
 import { formatDistance } from "@/lib/format";
 import { paceRoleLabel } from "@/pace/types";
 import { Badge } from "@/components/ui/Badge";
-import { RunnerTable, type RunnerRow } from "@/components/races/RunnerTable";
+import { RunnerTable, type BookmakerPlaceOption, type RunnerRow } from "@/components/races/RunnerTable";
+import { SyntheticModelBanner } from "@/components/model/SyntheticModelBanner";
 
 export default async function RaceDetailPage({ params }: PageProps<"/races/[raceId]">) {
   const { raceId } = await params;
   const race = await getRaceDetail(raceId);
   if (!race) notFound();
+
+  const isSynthetic = race.runners.some((r) => r.predictionSnapshots[0]?.modelVersionRef?.isSynthetic);
+
+  const bookmakerOptions: BookmakerPlaceOption[] = race.placeTerms.map((term) => ({
+    bookmakerId: term.bookmakerId,
+    bookmakerName: term.bookmaker.name,
+    places: term.places,
+  }));
 
   const rows: RunnerRow[] = race.runners.map((runner) => {
     const snapshot = runner.predictionSnapshots[0] ?? null;
@@ -33,12 +42,15 @@ export default async function RaceDetailPage({ params }: PageProps<"/races/[race
       winProbability: snapshot?.winProbability ?? null,
       placeProbability: snapshot?.placeProbability ?? null,
       placeBasisPlaces: snapshot?.placeBasisPlaces ?? race.bookmakerPlaces ?? null,
+      placeProbabilityBands: snapshot?.placeProbabilityBands.map((b) => ({ topN: b.topN, probabilityCalibrated: b.probabilityCalibrated })) ?? [],
       confidence: snapshot?.modelConfidence ?? null,
       fairOddsDecimal: snapshot?.fairOddsDecimal ?? null,
       valueEdge: snapshot?.valueEdgeAbsolute ?? null,
       officialRating: runner.officialRating,
       weightLbs: runner.weightLbsTotal,
       draw: runner.draw,
+      fieldSize: race.numberOfRunners,
+      paceCollapseProbability: runner.paceProfile?.paceCollapseProbability ?? null,
       form: formString,
       paceStyle: runner.paceProfile ? paceRoleLabel(runner.paceProfile.projectedRole) : "—",
       transitionScore: runner.paceProfile?.relativeAccelerationIndex ?? null,
@@ -48,8 +60,12 @@ export default async function RaceDetailPage({ params }: PageProps<"/races/[race
     };
   });
 
+  const hasModelOutput = rows.some((r) => r.winProbability !== null);
+
   return (
     <div className="flex flex-col gap-6">
+      {isSynthetic && <SyntheticModelBanner />}
+
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <div className="flex items-center gap-2 text-xs text-text-muted">
@@ -84,12 +100,12 @@ export default async function RaceDetailPage({ params }: PageProps<"/races/[race
         </div>
       </div>
 
-      <RunnerTable rows={rows} />
+      <RunnerTable rows={rows} bookmakerOptions={bookmakerOptions} />
 
       <p className="text-xs text-text-muted">
-        Win %, Place %, Confidence, Fair Odds and Value Edge are populated by the future probability
-        model (Phase 2) and currently read &quot;Model not yet configured&quot;. Place % will always state
-        the bookmaker place count it is computed against.
+        {hasModelOutput
+          ? "Win %, Place %, Confidence, Fair Odds and Value Edge are model outputs — see the Dashboard for calibration quality. Place % is picked from the bookmaker place-terms selector above; a * marks a nearest-available depth when the exact one isn't modelled."
+          : 'Win %, Place %, Confidence, Fair Odds and Value Edge are populated by the probability model and currently read "Model not yet configured" for this race — run `npm run model:predict`.'}
       </p>
     </div>
   );

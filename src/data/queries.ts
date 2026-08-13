@@ -56,6 +56,7 @@ export async function getRaceDetail(raceId: string) {
             where: { snapshotType: "PRE_RACE" },
             orderBy: { createdAt: "desc" },
             take: 1,
+            include: { placeProbabilityBands: true, modelVersionRef: true },
           },
           result: { include: { observations: true } },
         },
@@ -68,11 +69,22 @@ export async function getRunnerDetail(runnerId: string) {
   const runner = await prisma.runner.findUnique({
     where: { id: runnerId },
     include: {
-      race: { include: { placeTerms: { include: { bookmaker: true } } } },
+      race: {
+        include: {
+          placeTerms: { include: { bookmaker: true } },
+          // Sibling runners in the same field — needed so the runner-detail
+          // explanation engine can express pace/weight/rating facts
+          // relative to today's actual field, not in a vacuum.
+          runners: { select: { id: true, officialRating: true, weightLbsTotal: true, paceProfile: true } },
+        },
+      },
       horse: { include: { evidenceProfile: true } },
       paceProfile: true,
       marketPrices: { include: { bookmaker: true }, orderBy: { timestamp: "asc" } },
-      predictionSnapshots: { orderBy: { createdAt: "desc" } },
+      predictionSnapshots: {
+        orderBy: { createdAt: "desc" },
+        include: { placeProbabilityBands: true, modelVersionRef: true },
+      },
       result: { include: { observations: true } },
       features: { include: { definition: true } },
     },
@@ -153,16 +165,114 @@ export async function getBookmakers() {
   return prisma.bookmaker.findMany({ orderBy: { name: "asc" } });
 }
 
+/** Lightweight, model-agnostic result summary — deliberately selects only
+ * the columns the dashboard's legacy "all recorded results" card needs, to
+ * stay fast as ResultEntry grows into the thousands (a full relational
+ * include here previously blew SQLite's bound-parameter limit). */
 export async function getPerformanceData() {
-  const results = await prisma.resultEntry.findMany({
+  return prisma.resultEntry.findMany({
+    select: { finishingPosition: true, placeOutcome: true, profitLossWinStake: true },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: model versioning, calibration dashboard, value scanner, backtest mode
+// ---------------------------------------------------------------------------
+
+export async function getModelVersions() {
+  return prisma.modelVersion.findMany({ orderBy: { createdAt: "desc" } });
+}
+
+export async function getModelVersionById(modelVersionId: string) {
+  return prisma.modelVersion.findUnique({ where: { id: modelVersionId } });
+}
+
+/**
+ * Every PredictionSnapshot produced by a given ModelVersion, joined to the
+ * runner/race/result needed to compute live calibration + breakdown
+ * metrics in TypeScript (see src/backtesting/scoring.ts). Deliberately
+ * recomputed from raw snapshots + results on every dashboard load rather
+ * than trusting a cached summary, so the dashboard can never go stale.
+ */
+export async function getPredictionsForModelVersion(modelVersionId: string) {
+  return prisma.predictionSnapshot.findMany({
+    where: { modelVersionId },
     include: {
+      placeProbabilityBands: true,
       runner: {
         include: {
+          horse: { include: { evidenceProfile: true } },
           race: true,
-          predictionSnapshots: { where: { snapshotType: "PRE_RACE" }, take: 1 },
+          result: true,
         },
       },
     },
   });
-  return results;
+}
+
+/**
+ * Candidates for the Daily Value Scanner: every non-runner in a scheduled/
+ * delayed race that has a Phase 2 model prediction attached, across ALL
+ * races (not scoped to one race, unlike the race analysis table).
+ */
+export async function getValueScannerCandidates() {
+  return prisma.runner.findMany({
+    where: {
+      nonRunner: false,
+      race: { raceStatus: { in: ["SCHEDULED", "DELAYED"] } },
+      predictionSnapshots: { some: { snapshotType: "PRE_RACE", modelVersionId: { not: null } } },
+    },
+    include: {
+      horse: { include: { evidenceProfile: true } },
+      race: { include: { placeTerms: { include: { bookmaker: true } } } },
+      predictionSnapshots: {
+        where: { snapshotType: "PRE_RACE", modelVersionId: { not: null } },
+        orderBy: { createdAt: "desc" },
+        take: 1,
+        include: { placeProbabilityBands: true, modelVersionRef: true },
+      },
+    },
+    orderBy: [{ race: { date: "asc" } }, { race: { raceTime: "asc" } }],
+  });
+}
+
+/** Distinct race dates that have at least one model-generated (Phase 2)
+ * PredictionSnapshot AND a known result — i.e. dates the Backtest Mode
+ * page can show a genuine predicted-vs-actual comparison for. Upcoming
+ * (not-yet-resulted) predictions are deliberately excluded here; they're
+ * already visible via the Races and Value Scanner pages. */
+export async function getBacktestAvailableDates() {
+  const snapshots = await prisma.predictionSnapshot.findMany({
+    where: { modelVersionId: { not: null }, runner: { race: { raceStatus: "RESULTED" } } },
+    select: { runner: { select: { race: { select: { date: true } } } } },
+    distinct: ["runnerId"],
+  });
+  const dates = new Set(snapshots.map((s) => s.runner.race.date.toISOString().slice(0, 10)));
+  return Array.from(dates).sort();
+}
+
+/** Everything predicted (by any model) for RESULTED races on a given date,
+ * alongside the actual outcome — the core of "what would RacingEdge have
+ * said before this race, and what actually happened". */
+export async function getBacktestPredictionsForDate(date: Date) {
+  return prisma.race.findMany({
+    where: { date: { gte: startOfDay(date), lte: endOfDay(date) }, raceStatus: "RESULTED" },
+    orderBy: { raceTime: "asc" },
+    include: {
+      placeTerms: { include: { bookmaker: true } },
+      runners: {
+        orderBy: { clothNumber: "asc" },
+        include: {
+          horse: true,
+          result: true,
+          predictionSnapshots: {
+            where: { snapshotType: "PRE_RACE", modelVersionId: { not: null } },
+            orderBy: { createdAt: "desc" },
+            take: 1,
+            include: { placeProbabilityBands: true, modelVersionRef: true },
+          },
+        },
+      },
+    },
+  });
 }
