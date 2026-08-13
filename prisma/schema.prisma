@@ -1,0 +1,674 @@
+// RacingEdge — Phase 1 data architecture.
+//
+// This schema deliberately stores raw inputs, market data and calculated
+// features SEPARATELY from any probability model output. No model weighting
+// is encoded here — see FeatureDefinition / Feature for the flexible store
+// that a future model will read from.
+//
+// SQLite is used for local-first development. Field types are chosen to be
+// PostgreSQL-compatible (String/Int/Float/Boolean/DateTime) so migration to
+// Postgres later is a provider swap, not a redesign.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum FlatJumps {
+  FLAT
+  JUMPS
+}
+
+enum RaceSurface {
+  TURF
+  ALL_WEATHER
+  DIRT
+}
+
+enum HandicapType {
+  HANDICAP
+  NON_HANDICAP
+}
+
+enum RaceStatus {
+  SCHEDULED
+  DELAYED
+  ABANDONED
+  RESULTED
+}
+
+enum ResultStatus {
+  PENDING
+  PROVISIONAL
+  CONFIRMED
+  VOID
+}
+
+enum Sex {
+  COLT
+  FILLY
+  GELDING
+  MARE
+  HORSE
+  RIG
+}
+
+enum SnapshotType {
+  PRE_RACE
+  IN_PLAY
+  POST_RACE_REVIEW
+}
+
+enum EvidenceDensityLabel {
+  VERY_LOW
+  LOW
+  MODERATE
+  HIGH
+  VERY_HIGH
+}
+
+enum PaceRole {
+  LEADER
+  PRONOUNCED_PACE // press the pace / prominent
+  MIDDIVISION
+  HOLD_UP
+  UNKNOWN
+}
+
+enum FeatureValueType {
+  NUMERIC
+  TEXT
+  BOOLEAN
+  CATEGORY
+}
+
+enum FeatureCategory {
+  CURRENT_ABILITY
+  CLASS
+  HANDICAP
+  WEIGHT
+  COURSE
+  DISTANCE
+  GROUND
+  DRAW
+  PACE_POSITION_ACQUISITION
+  PACE_TRANSITION_SPEED
+  PACE_LATE_SUSTAINABILITY
+  PACE_RACE_SHAPE
+  TRAINER_JOCKEY
+  HEADGEAR_EQUIPMENT
+  PEDIGREE
+  EVIDENCE_UNCERTAINTY
+  OTHER
+}
+
+enum ImportSourceType {
+  MANUAL
+  CSV
+  JSON
+  API
+}
+
+enum ImportStatus {
+  PENDING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum ObservationTagType {
+  EXCELLENT_BREAK
+  SLOW_BREAK
+  LED_CHEAPLY
+  FOUGHT_FOR_LEAD
+  RACED_PROMINENTLY
+  MIDFIELD
+  HELD_UP
+  TRAPPED_WIDE
+  BLOCKED
+  SWITCHED
+  LOST_GROUND_SEEKING_RUN
+  TRAVELLED_STRONGLY
+  UNABLE_TO_MATCH_ACCELERATION
+  STRONG_TRANSITION
+  WEAKENED_FINAL_FURLONG
+  STAYED_ON_STRONGLY
+  PACE_COLLAPSE_BENEFITED
+  PACE_COLLAPSE_HURT
+  BAD_RIDE_POSITIONING
+  RACE_NOT_REPRESENTATIVE
+  CLEAN_TEST_OF_THESIS
+}
+
+enum SelectionType {
+  WIN_VALUE
+  EACH_WAY_VALUE
+  PLACE_PROBABILITY
+  DAILY_VALUE
+  LUCKY_15_LEG
+}
+
+// ---------------------------------------------------------------------------
+// RACE
+// ---------------------------------------------------------------------------
+
+model Race {
+  id           String  @id @default(cuid())
+  isSampleData Boolean @default(false)
+
+  date       DateTime
+  raceTime   String // "14:35" local off-time
+  racecourse String
+  country    String
+
+  raceName         String
+  raceType         String? // e.g. "Maiden", "Handicap Chase", "Novice Hurdle"
+  flatJumps        FlatJumps
+  surface          RaceSurface
+  distanceYards    Int? // canonical distance in yards
+  distanceFurlongs Float
+
+  raceClass    Int? // 1 (highest) - 7 (lowest), UK/IRE style
+  gradeGroup   String? // e.g. "Group 1", "Grade 2", null if unclassified
+  handicapType HandicapType
+
+  ageRestriction String? // e.g. "3yo+", "2yo"
+  sexRestriction String? // e.g. "Fillies & Mares", null if open
+
+  numberOfRunners  Int
+  going            String? // e.g. "Good to Soft"
+  goingDescription String?
+  railPosition     String?
+  stallsPosition   String? // stalls configuration, if known
+
+  weatherSummary     String?
+  temperatureCelsius Float?
+  windSummary        String?
+  precipitationMm    Float?
+
+  prizeMoneyTotal Float?
+  currency        String @default("GBP")
+
+  eachWayFraction Float? // e.g. 0.2, 0.25 — default terms, overridable per bookmaker
+  bookmakerPlaces Int? // default number of places paid, overridable per bookmaker
+  extraPlaceFlag  Boolean @default(false)
+
+  raceStatus   RaceStatus   @default(SCHEDULED)
+  resultStatus ResultStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runners       Runner[]
+  placeTerms    RacePlaceTerms[]
+  importBatch   ImportBatch?     @relation(fields: [importBatchId], references: [id])
+  importBatchId String?
+
+  @@index([date])
+  @@index([racecourse])
+  @@index([country])
+}
+
+// Bookmaker place terms are race-specific AND bookmaker-specific: the same
+// race can pay 3 places with one bookmaker and 5 (enhanced) with another.
+// "Place probability" must always be computed against one of these rows,
+// never assumed to mean top-3.
+model RacePlaceTerms {
+  id          String    @id @default(cuid())
+  race        Race      @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  raceId      String
+  bookmaker   Bookmaker @relation(fields: [bookmakerId], references: [id])
+  bookmakerId String
+
+  places          Int // e.g. 3, 4, 5
+  eachWayFraction Float // e.g. 1/4, 1/5
+  extraPlaces     Boolean @default(false)
+  terms           String? // free text, e.g. "1-2-3-4-5 if 16+ runners"
+
+  createdAt DateTime @default(now())
+
+  @@unique([raceId, bookmakerId])
+}
+
+// ---------------------------------------------------------------------------
+// HORSE
+// ---------------------------------------------------------------------------
+
+model Horse {
+  id           String  @id @default(cuid())
+  isSampleData Boolean @default(false)
+
+  name        String
+  countryBred String?
+  yearOfBirth Int?
+  sex         Sex?
+
+  sireName    String?
+  damName     String?
+  damsireName String?
+
+  trainerName String?
+  ownerName   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runners         Runner[]
+  formEntries     FormEntry[]
+  evidenceProfile EvidenceProfile?
+
+  @@index([name])
+}
+
+// ---------------------------------------------------------------------------
+// RUNNER (horse-race combination)
+// ---------------------------------------------------------------------------
+
+model Runner {
+  id           String  @id @default(cuid())
+  isSampleData Boolean @default(false)
+
+  race    Race   @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  raceId  String
+  horse   Horse  @relation(fields: [horseId], references: [id])
+  horseId String
+
+  clothNumber Int?
+  draw        Int?
+
+  ageAtRace      Int?
+  weightStone    Int?
+  weightPounds   Int?
+  weightLbsTotal Int? // total weight carried in lbs, canonical
+
+  officialRating   Int?
+  racingPostRating Int?
+  timeformRating   Int?
+  topspeedRating   Int?
+
+  jockeyName     String?
+  jockeyClaimLbs Int?
+  trainerName    String?
+
+  headgear          String? // e.g. "CP", "B", "V", comma separated codes
+  firstTimeHeadgear Boolean @default(false)
+
+  daysSinceLastRun Int?
+
+  currentOddsDecimal    Float?
+  currentOddsFractional String?
+  openingOddsDecimal    Float?
+  startingPriceDecimal  Float?
+  exchangePriceDecimal  Float?
+
+  nonRunner     Boolean @default(false)
+  favouriteRank Int? // 1 = joint/outright favourite
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marketPrices        RunnerMarketPrice[]
+  features            Feature[]
+  paceProfile         RunnerPaceProfile?
+  predictionSnapshots PredictionSnapshot[]
+  result              ResultEntry?
+  lucky15Legs         Lucky15Leg[]
+
+  @@unique([raceId, horseId])
+  @@index([raceId])
+  @@index([horseId])
+}
+
+// ---------------------------------------------------------------------------
+// FORM / PREVIOUS RUN — historic performance record for a horse
+// ---------------------------------------------------------------------------
+
+model FormEntry {
+  id           String  @id @default(cuid())
+  isSampleData Boolean @default(false)
+
+  horse   Horse  @relation(fields: [horseId], references: [id], onDelete: Cascade)
+  horseId String
+
+  // Optionally link to a Race already stored in RacingEdge (if the prior run
+  // is itself in our database). Otherwise the descriptive fields below stand
+  // alone for externally-sourced history.
+  linkedRaceId String?
+
+  raceDate         DateTime
+  course           String
+  country          String?
+  distanceFurlongs Float?
+  going            String?
+  raceClass        Int?
+  flatJumps        FlatJumps?
+  fieldSize        Int?
+
+  finishingPosition     Int? // null if pulled up / unseated / fell etc.
+  finishStatus          String? // "PU", "UR", "F", "BD", "DSQ", "WON", "PLACED", "RAN"
+  beatenDistanceLengths Float?
+  startingPriceDecimal  Float?
+  officialRating        Int?
+  weightPounds          Int?
+  draw                  Int?
+
+  jockeyName String?
+  headgear   String?
+
+  raceComment      String?
+  inRunningComment String?
+
+  earlyPosition   Int? // position early in race
+  halfwayPosition Int?
+  position3fOut   Int?
+  position2fOut   Int?
+  position1fOut   Int?
+
+  sectionalTimes           String? // JSON-encoded array of furlong splits, if available
+  finishingSpeedPercentage Float? // e.g. Topspeed-style late-pace metric
+  paceClassification       String? // e.g. "Led", "Prominent", "Held up"
+  raceStrengthIndex        Float? // strength/quality of the race field, if calculated
+
+  winnerSubsequentPerformance String? // free text / JSON note, filled in later
+  collateralFormNotes         String? // free text / JSON note on collateral form links
+
+  createdAt DateTime @default(now())
+
+  @@index([horseId])
+  @@index([raceDate])
+  @@index([course])
+}
+
+// ---------------------------------------------------------------------------
+// MODEL FEATURE STORE
+//
+// Deliberately generic: (runnerId, category, key) -> value. No feature here
+// implies a weighting or a formula. FeatureDefinition documents what each
+// key means and how it is computed so the future model has a stable,
+// self-describing input surface.
+// ---------------------------------------------------------------------------
+
+model FeatureDefinition {
+  key         String           @id // e.g. "course_win_pct", "draw_percentile"
+  category    FeatureCategory
+  label       String
+  description String
+  valueType   FeatureValueType
+  unit        String? // e.g. "%", "lbs", "furlongs"
+  createdAt   DateTime         @default(now())
+
+  features Feature[]
+}
+
+model Feature {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String
+
+  definition FeatureDefinition @relation(fields: [key], references: [key])
+  key        String
+
+  numericValue Float?
+  textValue    String?
+  booleanValue Boolean?
+
+  computedAt   DateTime @default(now())
+  modelVersion String? // tag identifying which future computation produced this
+  sourceNote   String? // provenance, e.g. "derived from FormEntry 2019-2024"
+
+  @@unique([runnerId, key])
+  @@index([runnerId])
+  @@index([key])
+}
+
+// ---------------------------------------------------------------------------
+// EVIDENCE CONFIDENCE
+//
+// Measures how much reliable historical information exists for a horse.
+// This is entirely independent of win probability — a horse can have very
+// high evidence density and a low win probability, or vice versa.
+// ---------------------------------------------------------------------------
+
+model EvidenceProfile {
+  id      String @id @default(cuid())
+  horse   Horse  @relation(fields: [horseId], references: [id], onDelete: Cascade)
+  horseId String @unique
+
+  careerStarts       Int @default(0)
+  startsLast12Months Int @default(0)
+  startsAtCourse     Int @default(0)
+  startsAtDistance   Int @default(0)
+  startsOnGoing      Int @default(0)
+
+  evidenceDensityScore Float? // 0.0 - 1.0, higher = more reliable data
+  evidenceDensityLabel EvidenceDensityLabel?
+  uncertaintyNote      String?
+
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// PACE / RACE SHAPE
+//
+// Three concepts kept strictly separate per horse, for a given runner
+// (race-specific projection, since pace role depends on the field, draw and
+// likely competition for the lead in THIS race):
+//   1. Position acquisition
+//   2. Transition speed
+//   3. Late sustainability
+// ---------------------------------------------------------------------------
+
+model RunnerPaceProfile {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String @unique
+
+  projectedRole PaceRole @default(UNKNOWN)
+
+  // --- 1. Position acquisition ---
+  usualEarlyPosition          Float? // average early-race position historically
+  breaksQuicklyRate           Float? // 0-1, frequency of fast breaks
+  slowStartRate               Float? // 0-1, frequency of slow starts
+  energyToObtainPositionIndex Float? // relative energy cost of achieving preferred position
+
+  // --- 2. Transition speed (3f -> 2f -> 1f acceleration phase) ---
+  positionChange3fTo2f      Float?
+  positionChange2fTo1f      Float?
+  relativeAccelerationIndex Float?
+
+  // --- 3. Late sustainability ---
+  finishingSpeedIndex        Float?
+  positionChangeFinalFurlong Float?
+  weakensLateRate            Float? // 0-1
+  staysOnStronglyRate        Float? // 0-1
+
+  // --- Race-shape context (populated per race, describes the field not just the horse) ---
+  competitionForLeadIndex Float?
+  pacePressureIndex       Float?
+  paceCollapseProbability Float?
+
+  notes     String?
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// MARKET DATA
+// ---------------------------------------------------------------------------
+
+model Bookmaker {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  isExchange Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  marketPrices RunnerMarketPrice[]
+  placeTerms   RacePlaceTerms[]
+}
+
+model RunnerMarketPrice {
+  id          String    @id @default(cuid())
+  runner      Runner    @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId    String
+  bookmaker   Bookmaker @relation(fields: [bookmakerId], references: [id])
+  bookmakerId String
+
+  timestamp       DateTime
+  winOddsDecimal  Float
+  eachWayFraction Float?
+  numberOfPlaces  Int?
+  extraPlaces     Boolean  @default(false)
+
+  isOpeningPrice  Boolean @default(false)
+  isStartingPrice Boolean @default(false)
+  isClosingPrice  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([runnerId])
+  @@index([bookmakerId])
+  @@index([timestamp])
+}
+
+// ---------------------------------------------------------------------------
+// PREDICTION SNAPSHOT
+//
+// Immutable record of the model's pre-race output. Results must NEVER
+// overwrite these rows — the whole point of RacingEdge is to judge whether
+// the pre-race probability estimate was well-calibrated, not to retrofit
+// a good-looking story after the result is known.
+// ---------------------------------------------------------------------------
+
+model PredictionSnapshot {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String
+
+  snapshotType SnapshotType @default(PRE_RACE)
+  modelVersion String // e.g. "unconfigured" during Phase 1
+
+  winProbability        Float? // null = "Model not yet configured"
+  placeProbability      Float?
+  placeBasisPlaces      Int? // number of bookmaker places this placeProbability was computed against
+  placeBasisBookmakerId String?
+
+  modelConfidence Float? // 0-1, kept entirely separate from winProbability
+
+  fairOddsDecimal          Float?
+  marketImpliedProbability Float?
+  valueEdgeAbsolute        Float? // winProbability - marketImpliedProbability
+  valueEdgeRelative        Float? // valueEdgeAbsolute / marketImpliedProbability
+
+  referenceOddsDecimal Float? // market odds this snapshot was compared against
+
+  isLocked  Boolean  @default(true) // immutability guard, see lib/results
+  createdAt DateTime @default(now())
+
+  @@index([runnerId])
+  @@index([snapshotType])
+}
+
+// ---------------------------------------------------------------------------
+// RESULT TRACKING
+// ---------------------------------------------------------------------------
+
+model ResultEntry {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String @unique
+
+  finishingPosition     Int? // null if non-runner / did not finish
+  finishStatus          String? // "WON", "PLACED", "RAN", "PU", "UR", "F", "BD", "DSQ"
+  beatenDistanceLengths Float?
+
+  startingPriceDecimal Float?
+  closingOddsDecimal   Float?
+
+  placeOutcome           Boolean? // did this runner place, per the PredictionSnapshot's placeBasis
+  profitLossWinStake     Float? // P/L for a 1pt win stake at startingPriceDecimal
+  profitLossEachWayStake Float? // P/L for a 1pt EW stake (2pt total) at startingPriceDecimal
+
+  resultStatus ResultStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  observations RunnerObservation[]
+}
+
+model RunnerObservation {
+  id       String      @id @default(cuid())
+  result   ResultEntry @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  resultId String
+
+  tag      ObservationTagType?
+  freeText String?
+
+  createdAt DateTime @default(now())
+
+  @@index([resultId])
+}
+
+// ---------------------------------------------------------------------------
+// LUCKY 15 BUILDER (placeholder interface + data structures only)
+// ---------------------------------------------------------------------------
+
+model Lucky15Slip {
+  id        String   @id @default(cuid())
+  name      String?
+  date      DateTime
+  createdAt DateTime @default(now())
+
+  minOddsDecimal     Float?
+  maxOddsDecimal     Float?
+  minConfidence      Float?
+  minPlaceEdge       Float?
+  minRunners         Int?
+  enhancedPlacesOnly Boolean    @default(false)
+  flatJumpsFilter    FlatJumps?
+  countryFilter      String? // comma separated allowed countries
+  bookmakerId        String?
+
+  legs Lucky15Leg[]
+}
+
+model Lucky15Leg {
+  id       String      @id @default(cuid())
+  slip     Lucky15Slip @relation(fields: [slipId], references: [id], onDelete: Cascade)
+  slipId   String
+  runner   Runner      @relation(fields: [runnerId], references: [id])
+  runnerId String
+
+  selectionType SelectionType @default(LUCKY_15_LEG)
+  rationale     String? // rule-based explanation placeholder, no LLM waffle
+  sortOrder     Int           @default(0)
+
+  @@unique([slipId, runnerId])
+}
+
+// ---------------------------------------------------------------------------
+// DATA IMPORT
+// ---------------------------------------------------------------------------
+
+model ImportBatch {
+  id         String           @id @default(cuid())
+  sourceType ImportSourceType
+  filename   String?
+  status     ImportStatus     @default(PENDING)
+
+  rowCount     Int?
+  successCount Int?
+  errorCount   Int?
+  errorLog     String? // JSON-encoded array of row-level errors
+
+  importedAt DateTime @default(now())
+
+  races Race[]
+}
