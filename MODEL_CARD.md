@@ -3,6 +3,21 @@
 This card describes the baseline win/place probability models shipped with RacingEdge Phase 2.
 Read it before interpreting any number the app shows you.
 
+**Phase 3A update:** the model algorithms described below are unchanged — Phase 3A explicitly did
+not touch them. What changed is everything *around* them: every `ModelVersion` now references an
+immutable `DatasetVersion` (exact race set, source classification, data-quality snapshot at
+creation time); training defaults to REAL races only (`--include-synthetic` required otherwise);
+a full temporal-leakage audit runs before every training run and aborts training on FAILED; and
+every training/backtest run reports a market-implied-probability baseline comparison alongside the
+model's own metrics. The `ModelVersion` rows currently in this database were trained
+with `--include-synthetic` (there is no real data yet) and are labelled both
+`SYNTHETIC TEST MODEL — NOT FOR BETTING USE` and `RESEARCH MODEL — INSUFFICIENT HISTORICAL DATA` —
+the second label reflects Phase 3A's minimum real-data gate (≥10,000 races / ≥100,000 runners),
+which nothing in this database is remotely close to clearing regardless of synthetic/real status.
+See [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md),
+[DATA_PROVENANCE.md](./DATA_PROVENANCE.md), and [DATA_SOURCES.md](./DATA_SOURCES.md) for the full
+Phase 3A design.
+
 ## Intended use
 
 - **Research and architecture demonstration.** These models exist to prove the feature
@@ -102,6 +117,16 @@ should be expected from an unbiased baseline backing every runner blind (bookmak
 alone should produce a negative ROI even for a perfectly calibrated model) and is reported here,
 not hidden, per the project's explicit instruction not to manufacture impressive-looking numbers.
 
+**Phase 3A market baseline comparison** (same test split, 401 runners): the market's own
+normalized implied win probabilities (overround removed) score Brier = 0.0676, versus this
+model's Brier = 0.0790 — **the market baseline beats the primary model on this test split.** This
+is reported honestly, not smoothed over: it is exactly what should be expected from a baseline
+features-only model trained on ~1,100 rows of substantially synthetic data going up against an
+efficient market, and it is the correct way to read "does RacingEdge add information beyond the
+market" — right now, on this data, the answer is no. Re-run `npm run model:train` to reproduce
+(the market-baseline line is printed during training and stored in
+`ModelVersion.metricsJson.market_baseline_comparison`).
+
 Live, always-current versions of every metric above (plus calibration curves and breakdowns by
 class/course/going/distance/age/confidence/evidence band) are on the `/dashboard` page, recomputed
 directly from stored `PredictionSnapshot` + `ResultEntry` rows — never cached or hand-edited.
@@ -110,6 +135,10 @@ directly from stored `PredictionSnapshot` + `ResultEntry` rows — never cached 
 
 - **Synthetic training data dominates.** See "Training data" above. This is the single most
   important limitation — nothing else on this list matters until real data replaces it.
+- **Below the Phase 3A minimum real-data gate.** Every `DatasetVersion` built from this database is
+  labelled `RESEARCH MODEL — INSUFFICIENT HISTORICAL DATA` (< 10,000 races / 100,000 runners,
+  configurable in `racingedge_data.dataset_version`) — a threshold this synthetic dataset doesn't
+  clear either, and wouldn't even if it were entirely real.
 - **Small dataset.** ~1,100 training rows against ~166 features is a thin ratio; this is exactly
   why logistic regression needed heavy regularization and why LightGBM's conservative
   hyperparameters (shallow trees, row/column subsampling, L1/L2 penalties) matter more than usual.

@@ -21,6 +21,12 @@ REPORTS_DIR = PYTHON_DIR / "reports"
 # features. Stored on every ModelVersion row (featureSetVersion).
 FEATURE_SET_VERSION = "2026.08-v1"
 
+# Bump this whenever the Prisma schema changes in a way that would make an
+# old DatasetVersion's snapshot non-reproducible from the current schema
+# (new required data-quality fields, changed table shape, ...). Stored on
+# every DatasetVersion row (schemaVersion) — see racingedge_data.dataset_version.
+DATASET_SCHEMA_VERSION = "phase3a-v1"
+
 # Reproducibility.
 RANDOM_SEED = 42
 

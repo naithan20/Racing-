@@ -30,6 +30,8 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+from racingedge_data.dataset_version import readiness_for_dataset_version
+from racingedge_data.market_baseline import compare_market_vs_model, compute_market_probabilities
 from racingedge_model import db
 from racingedge_model.artifacts import load_bundle
 from racingedge_model.config import PLACE_DEPTHS, REPORTS_DIR
@@ -67,6 +69,10 @@ def main() -> None:
     print(f"Window: {start_date} .. {end_date}")
     if model_version["isSynthetic"]:
         print("*** SYNTHETIC TEST MODEL — NOT FOR BETTING USE ***")
+    if model_version.get("datasetVersionId"):
+        readiness = readiness_for_dataset_version(conn, model_version["datasetVersionId"])
+        if not readiness.is_production_ready:
+            print(f"*** {readiness.label} ***")
     if in_sample_warning:
         print(
             "*** WARNING: requested window overlaps the model's OWN TRAINING period "
@@ -109,6 +115,16 @@ def main() -> None:
     for depth in PLACE_DEPTHS:
         place_report[f"top{depth}"] = win_metrics(merged[f"placed_top{depth}"], merged[f"place_top{depth}"])
 
+    # Market baseline comparison over this same backtest window — does the
+    # model add information beyond the market here too, not just at
+    # original training-time evaluation?
+    merged["_market_probability"] = compute_market_probabilities(
+        merged, odds_col="startingPriceDecimal", race_id_col="race_id"
+    )
+    market_comparison = compare_market_vs_model(
+        merged, model_prob_col="win_probability", target_col="won", market_prob_col="_market_probability"
+    )
+
     # ROI breakdowns — evaluation-only, never a training objective.
     def band_roi(series: pd.Series, bins: list[float], labels: list[str]) -> dict:
         banded = pd.cut(series, bins=bins, labels=labels, include_lowest=True)
@@ -136,6 +152,7 @@ def main() -> None:
         "n_runners": int(len(predictions)),
         "win": win_report,
         "place": place_report,
+        "market_baseline_comparison": market_comparison,
         "roi_by_odds_band": roi_by_odds_band,
         "roi_by_confidence_band": roi_by_confidence_band,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -150,6 +167,12 @@ def main() -> None:
     print(f"\nWin: Brier={win_report['brier_score']:.4f} logloss={win_report['log_loss']:.4f} AUC={win_report['roc_auc']}")
     print(f"Win: strike rate={win_report['win_strike_rate']:.3f} (expected {win_report['expected_wins']:.1f} vs actual {win_report['actual_wins']})")
     print(f"Win: flat £1 ROI={win_report['roi_flat_win_stake']['roi_percent']}")
+    print(
+        f"Market baseline: n={market_comparison['n_comparable_rows']} "
+        f"market Brier={market_comparison['market']['brier_score']} "
+        f"model Brier={market_comparison['model']['brier_score']} "
+        f"model beats market on Brier={market_comparison['model_beats_market_on_brier']}"
+    )
     for depth in PLACE_DEPTHS:
         pr = place_report[f"top{depth}"]
         print(f"Place top{depth}: Brier={pr['brier_score']:.4f} strike rate={pr['win_strike_rate']:.3f}")

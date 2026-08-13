@@ -1,0 +1,31 @@
+{
+  "_fixture_note": "Illustrative test fixture only, NOT real racing data. Structurally plausible sample used to exercise TimeformProvider's field-mapping logic in tests. Course/horse/people names are fictitious and prefixed 'Fixture' to make that unmistakable.",
+  "form": [
+    {
+      "horse_id": "fixture-horse-1",
+      "horse": "Fixture Test Horse A",
+      "date": "2025-11-02T00:00:00",
+      "course": "Fixture Downs",
+      "country": "GB",
+      "distance_f": 18.0,
+      "going": "Soft",
+      "class": 4,
+      "field_size": 9,
+      "position": 2,
+      "finish_status": "PLACED",
+      "beaten_lengths": 3.5,
+      "sp_decimal": 5.5,
+      "or": 126,
+      "draw": null,
+      "jockey": "Fixture Jockey A",
+      "headgear": null,
+      "comment": "Fixture comment: travelled well, ridden out",
+      "halfway_pos": 4,
+      "pos_3f_out": 3,
+      "pos_2f_out": 2,
+      "pos_1f_out": 2,
+      "finishing_speed_pct": 98.5,
+      "race_id": "fixture-linked-race-1"
+    }
+  ]
+}

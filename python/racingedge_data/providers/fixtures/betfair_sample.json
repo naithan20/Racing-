@@ -1,0 +1,21 @@
+{
+  "_fixture_note": "Illustrative test fixture only, NOT real racing data. Structurally plausible sample used to exercise BetfairProvider's field-mapping logic in tests. Selection ids are fictitious.",
+  "prices": [
+    {
+      "selection_id": "fixture-runner-1",
+      "market_time": "2026-01-05T13:00:00",
+      "back": 6.4,
+      "lay": 6.6,
+      "total_matched": 15230.5,
+      "status": "OPEN"
+    },
+    {
+      "selection_id": "fixture-runner-1",
+      "market_time": "2026-01-05T14:29:00",
+      "back": 5.8,
+      "lay": 5.9,
+      "total_matched": 48210.0,
+      "status": "CLOSED"
+    }
+  ]
+}

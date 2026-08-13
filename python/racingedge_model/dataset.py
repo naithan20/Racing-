@@ -61,10 +61,21 @@ class RaceData:
         return racecourse.startswith("Synthetic ")
 
 
-def build_training_dataset(conn: sqlite3.Connection, verbose: bool = False) -> pd.DataFrame:
+def build_training_dataset(
+    conn: sqlite3.Connection, verbose: bool = False, source_types: list[str] | None = None
+) -> pd.DataFrame:
+    """`source_types`, if given, restricts training races to those whose
+    `Race.sourceType` is in the list (e.g. `["REAL"]`) — used by train.py's
+    production-training gate. Left as `None` by default so every existing
+    caller (tests, `full_dataset` fixture, ad-hoc research) keeps its prior
+    behaviour of using every RESULTED race regardless of source."""
+
     data = RaceData(conn)
 
-    resulted_races = data.races[data.races["raceStatus"] == "RESULTED"].sort_values("date")
+    resulted_races = data.races[data.races["raceStatus"] == "RESULTED"]
+    if source_types is not None:
+        resulted_races = resulted_races[resulted_races["sourceType"].isin(source_types)]
+    resulted_races = resulted_races.sort_values("date")
     rows: list[dict] = []
 
     for _, race_row in resulted_races.iterrows():

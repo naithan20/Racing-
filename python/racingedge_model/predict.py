@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import json
 
+from racingedge_data.dataset_version import readiness_for_dataset_version
 from racingedge_model import db
 from racingedge_model.artifacts import load_bundle
 from racingedge_model.pipeline import generate_predictions
@@ -43,6 +44,14 @@ def main() -> None:
     print(f"Using ModelVersion {model_version['id']} ({model_version['name']}, {model_version['version']})")
     if model_version["isSynthetic"]:
         print("*** SYNTHETIC TEST MODEL — NOT FOR BETTING USE ***")
+    if model_version.get("datasetVersionId"):
+        readiness = readiness_for_dataset_version(conn, model_version["datasetVersionId"])
+        if not readiness.is_production_ready:
+            print(
+                f"*** {readiness.label} — trained on {readiness.race_count} races / "
+                f"{readiness.runner_count} runners (need >= {readiness.min_races_required} / "
+                f"{readiness.min_runners_required}) ***"
+            )
 
     bundle = load_bundle(model_version["artifactPath"])
 

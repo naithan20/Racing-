@@ -8,6 +8,8 @@ const NAV_LINKS = [
   { href: "/dashboard", label: "Dashboard" },
   { href: "/backtest", label: "Backtest Mode" },
   { href: "/import", label: "Import" },
+  { href: "/data-quality", label: "Data Quality" },
+  { href: "/data-explorer", label: "Dataset Explorer" },
 ];
 
 export function Nav() {

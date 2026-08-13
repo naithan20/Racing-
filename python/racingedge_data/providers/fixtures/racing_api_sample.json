@@ -1,0 +1,46 @@
+{
+  "_fixture_note": "Illustrative test fixture only, NOT real racing data. Structurally plausible sample shaped after a generic racecards API, used to exercise RacingApiProvider's field-mapping logic in tests. Course/horse/people names are fictitious and prefixed 'Fixture' to make that unmistakable.",
+  "racecards": [
+    {
+      "race_id": "fixture-racingapi-race-1",
+      "off_dt": "2026-01-05T14:30:00",
+      "meeting": "Fixture Park",
+      "country": "GB",
+      "race_name": "Fixture Handicap Chase",
+      "race_type": "Handicap Chase",
+      "type": "jumps",
+      "surface": "turf",
+      "distance_f": 20.0,
+      "class": 4,
+      "is_handicap": true,
+      "going": "Good to Soft",
+      "field_size": 2,
+      "runners": [
+        {
+          "runner_id": "fixture-runner-1",
+          "horse_id": "fixture-horse-1",
+          "horse": "Fixture Test Horse A",
+          "number": 1,
+          "draw": null,
+          "or": 128,
+          "jockey": "Fixture Jockey A",
+          "trainer": "Fixture Trainer A",
+          "headgear": null,
+          "non_runner": false
+        },
+        {
+          "runner_id": "fixture-runner-2",
+          "horse_id": "fixture-horse-2",
+          "horse": "Fixture Test Horse B",
+          "number": 2,
+          "draw": null,
+          "or": 121,
+          "jockey": "Fixture Jockey B",
+          "trainer": "Fixture Trainer B",
+          "headgear": "CP",
+          "non_runner": false
+        }
+      ]
+    }
+  ]
+}
