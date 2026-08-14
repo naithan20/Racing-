@@ -1203,6 +1203,116 @@ model DatasetVersion {
 // explainable, not just a boolean.
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Phase 3D: consumer-facing data-source connection UX ("SELECT DATA SOURCE
+// -> CONNECT -> IMPORT"). `sourceId` matches an entry's `id` in the
+// TypeScript-side `SourceCatalog` (src/data/sourceCatalog.ts) — the catalog
+// itself is NOT stored in the database (it's static, versioned config, the
+// same reasoning as the Python feature registry), only the per-source
+// connection/import STATE is.
+// ---------------------------------------------------------------------------
+
+enum ConnectionStatus {
+  NOT_CONNECTED
+  CONNECTED
+  ERROR
+}
+
+enum ImportJobStatus {
+  PENDING
+  DOWNLOADING
+  INSPECTING
+  AWAITING_MAPPING_REVIEW
+  VALIDATING
+  IMPORTING
+  RESOLVING_ENTITIES
+  PROVENANCE_REVIEW
+  LEAKAGE_AUDIT
+  CREATING_DATASET_VERSION
+  GENERATING_QUALITY_REPORT
+  COMPLETED
+  FAILED
+}
+
+// One row per catalog source the user has connected (or attempted to
+// connect). For sources with no authentication step (a plain public URL),
+// "connecting" is a formality that just marks the source as set up — the
+// real gate is whether an import can actually run. Credentials themselves
+// are NEVER stored here or anywhere in the database — see
+// src/actions/dataSources.ts for where they actually live (a server-only,
+// gitignored config file, never sent to the client).
+model DataSourceConnection {
+  id           String           @id @default(cuid())
+  sourceId     String           @unique
+  status       ConnectionStatus @default(NOT_CONNECTED)
+  connectedAt  DateTime?
+  lastSyncAt   DateTime?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  importJobs ImportJob[]
+
+  @@index([sourceId])
+}
+
+// Tracks one run of the full "click Import -> done" pipeline: download (or
+// local file) -> inspect -> propose mapping -> (pause for human review if
+// anything is below high confidence) -> validate -> import -> resolve
+// entities -> provenance review -> leakage audit -> DatasetVersion -> data
+// quality report. Written directly by the Python job runner
+// (racingedge_data.import_pipeline), the same "Python writes SQLite
+// directly, Next.js reads it via Prisma" pattern every other data-layer
+// table in this project uses — there is no separate job queue.
+//
+// `datasetVersionId` / `importBatchId` are plain string references, not
+// Prisma relations — deliberately, matching `DataProvenance.entityId`'s
+// existing polymorphic-reference style, so this table doesn't force a back-
+// relation array onto `DatasetVersion`/`ImportBatch` for what is, from
+// their side, an optional and rarely-queried link.
+model ImportJob {
+  id           String                @id @default(cuid())
+  sourceId     String
+  connection   DataSourceConnection? @relation(fields: [connectionId], references: [id])
+  connectionId String?
+
+  status           ImportJobStatus @default(PENDING)
+  progressPercent  Int             @default(0)
+  currentStepLabel String?
+
+  downloadUrl        String?
+  downloadedFilePath String?
+  mappingFilePath    String?
+  provenanceStatus   String?
+  sourceLabel        String?
+
+  // JSON: {kaggleDatasetRef, sourceType, dateFrom, dateTo} — the run
+  // parameters, persisted so a run PAUSED at AWAITING_MAPPING_REVIEW can
+  // resume from exactly where it left off without the caller re-supplying
+  // them (the mapping-review UI only ever sends the confirmed mapping).
+  paramsJson String?
+
+  datasetVersionId String?
+  importBatchId    String?
+
+  racesImported   Int?
+  runnersImported Int?
+
+  errorMessage String?
+  // JSON array of {ts, step, message} — the full step-by-step audit trail
+  // shown in the import progress UI, kept even after completion.
+  logJson String?
+
+  startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  @@index([sourceId])
+  @@index([status])
+  @@index([connectionId])
+}
+
 model LeakageAuditRun {
   id String @id @default(cuid())
 

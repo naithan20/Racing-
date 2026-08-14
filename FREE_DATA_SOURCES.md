@@ -93,6 +93,22 @@ analysis) via `racingedge_data.value_backtest`, never to a pre-race `PredictionS
 - **Known limitations**: unverified schema and unverified licence, per above — both must be resolved
   by a human (inspector run + explicit review) before training on it, per this project's explicit
   human-in-the-loop requirement.
+- **Phase 3D update**: the official `kaggle` Python package (not the website) was installed and
+  actually run in this environment — `racingedge_data.providers.kaggle_adapter` is built against
+  genuine, verified behaviour of the package, not guessed. Two real findings: (1) `kaggle==1.6.17`
+  authenticates via a `kaggle.json` file (`KAGGLE_CONFIG_DIR` or `~/.config/kaggle`/`~/.kaggle`) or
+  `KAGGLE_USERNAME`/`KAGGLE_KEY` env vars, and behaves predictably under non-interactive stdio,
+  raising a clean `OSError` when unconfigured; (2) the newer `kaggle` 2.x package's OAuth-first
+  `kaggle auth login` flow crashes on import specifically under non-interactive/piped stdio — the
+  exact condition a Next.js-spawned subprocess always runs under — so `1.6.17` is pinned
+  deliberately in `python/requirements.txt`, not by default/inertia. No real Kaggle account or
+  dataset was reachable from this sandbox (kaggle.com itself is still network-blocked here), so the
+  actual download call (`dataset_download_files`) remains tested only against a mocked client.
+
+Connecting Kaggle no longer requires editing a config file by hand: **Settings → Data Connections
+→ Kaggle** in the RacingEdge UI writes the credentials server-side
+(`.data-connections/kaggle.json`, gitignored, mode 600) and never displays them back — see the
+README's "Phase 3D" section.
 
 This repository does **not** download Kaggle datasets automatically, even though direct download
 via the Kaggle API/website is often permitted for public datasets — per Phase 3C section 23's

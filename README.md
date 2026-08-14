@@ -1,4 +1,4 @@
-# RacingEdge — Phase 3C
+# RacingEdge — Phase 3D
 
 RacingEdge is a local-first horse-racing **analysis and decision-support** application. It is not a
 tip generator. It estimates win probability, place probability (against actual bookmaker place
@@ -19,15 +19,21 @@ API subscription credentials and could not reach the provider's documentation si
 full field-level schema, so **no real data was imported, no REAL DatasetVersion exists, and no
 real-data baseline retrain happened.** See [REAL_DATA_BASELINE.md](./REAL_DATA_BASELINE.md) for the
 full, honest account of exactly what was and wasn't possible and precisely what's needed to
-complete it. **Phase 3C** (this phase) builds a parallel, £0-cost data path — free/community
-datasets, a schema-agnostic inspector, provenance/licence review, a free market-benchmark importer,
-reduced feature profiles, dataset bias analysis, a behavioural-observation dataset, and value-cohort
-backtesting — since it stops at the same kind of boundary as Phase 3B (no local dataset file has
-been supplied), see [REAL_FREE_BASELINE.md](./REAL_FREE_BASELINE.md) and
-[FREE_DATA_SOURCES.md](./FREE_DATA_SOURCES.md) for the honest account of what's built vs. what's
-still pending a manually-downloaded file. See [DATA_SOURCES.md](./DATA_SOURCES.md),
-[DATA_PROVENANCE.md](./DATA_PROVENANCE.md), and
-[POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) for the underlying design.
+complete it. **Phase 3C** builds a parallel, £0-cost data path — free/community datasets, a
+schema-agnostic inspector, provenance/licence review, a free market-benchmark importer, reduced
+feature profiles, dataset bias analysis, a behavioural-observation dataset, and value-cohort
+backtesting — since it stops at the same kind of boundary as Phase 3B (no local dataset file had
+been supplied at the time), see [REAL_FREE_BASELINE.md](./REAL_FREE_BASELINE.md) and
+[FREE_DATA_SOURCES.md](./FREE_DATA_SOURCES.md) for that honest account. **Phase 3D** (this phase)
+turns Phase 3C's terminal/file-path workflow into a consumer UX: a **`/data-sources`** page (select
+a source → Connect → Import), a Kaggle integration using the official Kaggle API, one-click
+streaming downloads with resume/checksum/retry, an "Add data source from URL" flow, automatic
+schema-mapping with a browser review UI for anything below high confidence, a free-data discovery
+page, first-run onboarding, and a post-import summary with an explicit "Train Baseline Model"
+action. The CLI/`npm run data:*` workflow from Phase 3C remains fully available as the advanced
+fallback — nothing was removed, only wrapped in a UI. See the **Phase 3D** section below for the
+full account, and [DATA_SOURCES.md](./DATA_SOURCES.md), [DATA_PROVENANCE.md](./DATA_PROVENANCE.md),
+and [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) for the underlying design.
 
 **There is still no non-trivial amount of real racing data in this system** — every `ModelVersion`
 bundled here remains trained on synthetic data and is explicitly labelled
@@ -591,6 +597,84 @@ What Phase 3C **did** build, fully tested:
 
 See [FREE_DATA_SOURCES.md](./FREE_DATA_SOURCES.md) for the full source-by-source discovery record
 (RECOMMENDED / USE WITH CAUTION / REJECTED) and exactly what a maintainer needs to supply next.
+
+## Phase 3D — consumer data-source UX
+
+Phase 3C's free-data path worked, but required a terminal, a filesystem path, and manually running
+`npm run data:inspect`/`data:import-free`. Phase 3D's brief: make **SELECT DATA SOURCE → CONNECT →
+IMPORT** the normal way to add historical data — a non-technical user should be able to click
+through it in a browser, with the CLI kept only as an advanced fallback.
+
+**`/data-sources`** — every entry in `src/data/sourceCatalog.ts` (the single, centralized source
+registry — nothing about a specific source is hard-coded elsewhere) as a card: name, description,
+coverage, expected fields, cost (always FREE — see the £0 rule), auth-required, connection status,
+last sync, races/runners imported. Connect / Import / Sync / View Data Quality / Disconnect buttons,
+shown or hidden based on live state.
+
+**One-click import pipeline** (`racingedge_data/import_pipeline.py`) — clicking Import creates an
+`ImportJob` row and spawns the pipeline as a background process: download (or use an already-local
+file) → inspect → propose a mapping → pause for review only if something's below high confidence →
+validate → import → resolve entities → an auto-drafted provenance/licence review → temporal leakage
+audit → `DatasetVersion` → data-quality summary → done. Every step updates `ImportJob` directly (the
+same "Python writes SQLite, Next.js reads it via Prisma" pattern the rest of the data layer uses),
+so the browser polls a database row for progress rather than reading a subprocess's stdout.
+
+**Kaggle** (`racingedge_data/providers/kaggle_adapter.py`) — the official `kaggle` Python package
+only, no scraping. **Verified against the real, installed package, not guessed**: `kaggle==1.6.17`
+is pinned deliberately, after discovering (by actually installing and running it) that the newer
+2.x package's OAuth-first flow crashes on import under non-interactive stdio — exactly the
+condition a Next.js-spawned subprocess always runs under. Terms-not-accepted (HTTP 403) is detected
+and surfaced as "open the dataset page and accept its terms" — never bypassed. Connect once in
+**Settings → Data Connections**; credentials are written to a server-only, gitignored file
+(`.data-connections/kaggle.json`, mode 600) and a `KAGGLE_CONFIG_DIR` env var points the spawned
+Python process at it — never sent to or rendered in the browser.
+
+**Streaming downloads** (`racingedge_data/providers/download_adapter.py`) — resume via HTTP Range,
+SHA-256 checksum, retry with exponential backoff, and a fixed allowlisted-extension check
+(csv/json/jsonl/db/sqlite/zip/gz) that exists specifically so a pasted URL can never be used to fetch
+an executable. Tested entirely against a mocked `requests` — this sandbox's network egress policy
+blocks most external hosts, which is a property of the development environment, not of the feature;
+see the module's docstring.
+
+**"Add data source from URL"** — paste a URL, see hostname/file type/expected size before anything
+downloads, and explicitly confirm ("I've reviewed this source...") before the import can start.
+
+**Automatic schema mapping** — the Phase 3C inspector runs automatically; HIGH-confidence fields
+proceed without asking anything, and the UI states plainly ("12 fields mapped automatically, 2
+fields need confirmation") rather than pointing at a CLI. Anything below HIGH shows a browser table
+(external field → dropdown of RacingEdge fields, with example source values) before the import can
+continue.
+
+**Find free data** (`/data-sources/discover`) — every catalog entry, including disabled/unavailable
+ones, filterable by category/region/code, labelled VERIFIED / AVAILABLE BUT UNVERIFIED / REQUIRES
+CONNECTION / UNAVAILABLE — never claims a source works unless its adapter has actually been
+exercised.
+
+**First-run onboarding** — `/dashboard` shows "RacingEdge needs historical racing data" → **Add
+Free Racing Data** whenever no `REAL` race exists yet, linking straight to `/data-sources`.
+
+**Post-import summary + Train Baseline Model** — races/runners imported, date coverage, a
+completeness score (100 minus the average of the DatasetVersion's own missing-OR/draw/SP
+percentages — labelled "completeness", not "quality", since it says nothing about correctness),
+leakage-audit status, and a dataset-size label (EXPERIMENTAL/RESEARCH/LARGE RESEARCH per Phase 3C's
+own thresholds). Training is never triggered automatically — an explicit **Train Baseline Model**
+click spawns `racingedge_model.train` unchanged.
+
+**A genuine build bug found and fixed along the way**: `.venv/bin/python` is a symlink pointing
+outside the project directory, and passing that path straight to `child_process.spawn()` made
+Turbopack's build tracer try to statically resolve it as a bundleable asset and panic on every
+`next build`. Fixed by reading the interpreter path from a `RACINGEDGE_PYTHON_BIN` environment
+variable at runtime instead of a `path.join(process.cwd(), ...)` literal — see
+`src/lib/pythonRunner.ts`'s docstring for the full story and `.env.example` for the default.
+
+**Command line remains available** — every `npm run data:*` script from Phase 3C still works
+unchanged, including a new `data:run-import-job` wrapping the same pipeline the UI uses
+(`racingedge_data.cli.run_import_job`), for scripting, automation, and large/unattended imports.
+
+**What genuinely still requires a human**: connecting a real Kaggle account (an API key, entered
+once), accepting a dataset's terms on kaggle.com when Kaggle requires it, and — as in Phase 3C —
+supplying the actual dataset file/URL in the first place, since nothing here fabricates real
+racing data or downloads anything the user hasn't pointed at or confirmed.
 
 ## Recommended next phase
 

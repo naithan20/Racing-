@@ -60,4 +60,9 @@ __pycache__/
 *.pyc
 /python/artifacts/
 /python/reports/
+/python/storage/
 .pytest_cache/
+
+# Phase 3D: server-only data-source credentials (e.g. Kaggle kaggle.json) —
+# never committed, never sent to the client. See src/actions/dataSources.ts.
+/.data-connections/

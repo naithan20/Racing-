@@ -40,3 +40,17 @@ export interface Lucky15ActionState {
 }
 
 export const INITIAL_LUCKY15_STATE: Lucky15ActionState = { status: "idle", message: "" };
+
+export interface DataConnectionActionState {
+  status: "idle" | "success" | "error";
+  message: string;
+}
+
+export const INITIAL_DATA_CONNECTION_STATE: DataConnectionActionState = { status: "idle", message: "" };
+
+export interface ImportJobFormState {
+  status: "idle" | "error";
+  message: string;
+}
+
+export const INITIAL_IMPORT_JOB_FORM_STATE: ImportJobFormState = { status: "idle", message: "" };

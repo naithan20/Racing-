@@ -1,4 +1,6 @@
 import { getModelVersions, getPerformanceData, getPredictionsForModelVersion } from "@/data/queries";
+import { hasAnyRealData } from "@/data/dataSources";
+import { NoRealDataBanner } from "@/components/data-sources/NoRealDataBanner";
 import { brierScore, calibrationBuckets, logLoss, roiPercent } from "@/backtesting/scoring";
 import {
   ageBandLabel,
@@ -47,7 +49,11 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
   const params = await searchParams;
   const modelParam = Array.isArray(params.model) ? params.model[0] : params.model;
 
-  const [legacyResults, modelVersions] = await Promise.all([getPerformanceData(), getModelVersions()]);
+  const [legacyResults, modelVersions, hasRealData] = await Promise.all([
+    getPerformanceData(),
+    getModelVersions(),
+    hasAnyRealData(),
+  ]);
 
   const selectedModel = modelParam
     ? (modelVersions.find((m) => m.id === modelParam) ?? modelVersions[0])
@@ -96,6 +102,7 @@ export default async function DashboardPage({ searchParams }: PageProps<"/dashbo
 
   return (
     <div className="flex flex-col gap-6">
+      {!hasRealData && <NoRealDataBanner />}
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-lg font-semibold text-text-primary">Model performance dashboard</h1>

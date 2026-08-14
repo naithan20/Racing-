@@ -7,6 +7,7 @@ const NAV_LINKS = [
   { href: "/results", label: "Results" },
   { href: "/dashboard", label: "Dashboard" },
   { href: "/backtest", label: "Backtest Mode" },
+  { href: "/data-sources", label: "Data Sources" },
   { href: "/import", label: "Import" },
   { href: "/data-quality", label: "Data Quality" },
   { href: "/data-explorer", label: "Dataset Explorer" },

@@ -1,4 +1,4 @@
-# Data Sources — Phase 3A/3B/3C
+# Data Sources — Phase 3A/3B/3C/3D
 
 RacingEdge's overriding objective for Phase 3A/3B is **data integrity**, not predictive power. This
 document explains exactly where data is allowed to come from, how the provider abstraction works,
@@ -260,6 +260,18 @@ year-over-year comparison — for whatever's currently imported, or scoped to a 
 `--from`/`--to` range. Renders no verdict ("good"/"bad" dataset), only distributions and explicit
 warnings (e.g. "zero non-runners recorded" — a strong signal a source doesn't represent them at
 all) for a human to judge.
+
+## Phase 3D: the browser is now the primary way to add data
+
+Everything above remains fully accurate and fully usable from the command line — nothing was
+removed. Phase 3D adds a consumer-facing path on top of it: `/data-sources` (source cards with
+Connect/Import/Sync buttons), `/data-sources/discover` (the catalog, filterable), `/settings/
+data-connections` (Kaggle), and a mapping-review UI, all driven by the same Python adapters and the
+same `racingedge_data.import_pipeline` that the CLI uses — see the README's "Phase 3D" section for
+the full account, `src/data/sourceCatalog.ts` for the source registry, and
+`racingedge_data/import_pipeline.py` for the orchestration. The £0 rule and every no-scraping/
+provenance/leakage-audit guarantee described above apply identically regardless of which path (UI
+or CLI) triggers an import.
 
 ## Licensing reminder
 
