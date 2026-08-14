@@ -244,3 +244,60 @@ def feature_group_for(key: str) -> dict | None:
         if key in group["feature_keys"]:
             return group
     return None
+
+
+# ---------------------------------------------------------------------------
+# Phase 3C: feature profiles
+#
+# Free datasets are frequently missing sectional/positional in-running data
+# (the `pace` group) and sometimes headgear history (`headgear_changes`).
+# Rather than silently degrade or fabricate those groups' inputs, a
+# ModelVersion states up front which profile — and therefore which feature
+# GROUPS — it actually used. Never one entry per individual feature: with
+# ~140 features that would be pure repetition, and every feature within a
+# group shares the same data-availability story (see each group's
+# `missing_behaviour` above).
+# ---------------------------------------------------------------------------
+
+CORE_FREE_MODEL_GROUPS = [
+    "current_form",
+    "rating",
+    "weight",
+    "class",
+    "course_distance_going",
+    "draw",
+    "trainer_jockey",
+    "age_experience",
+    "evidence",
+]
+
+ENRICHED_FREE_MODEL_GROUPS = CORE_FREE_MODEL_GROUPS + ["headgear_changes"]
+
+FEATURE_PROFILES: dict[str, list[str]] = {
+    # Robust, widely-available fields only — current/historical finishing
+    # performance, official rating, weight, class, course/distance/going,
+    # draw, jockey/trainer, age/experience, and the evidence-confidence
+    # score (itself derived only from the above). Deliberately excludes
+    # `pace` (position acquisition / transition speed / late sustainability
+    # — requires positional/sectional data most free datasets lack) and
+    # `headgear_changes` (many free datasets don't carry headgear history).
+    "CORE_FREE_MODEL": CORE_FREE_MODEL_GROUPS,
+    # CORE_FREE_MODEL plus headgear/equipment-change features, for datasets
+    # that do carry headgear — still excludes `pace`.
+    "ENRICHED_FREE_MODEL": ENRICHED_FREE_MODEL_GROUPS,
+    # Every feature group, including `pace` — the Phase 1/2 default,
+    # appropriate for the synthetic dataset (which simulates pace data) or
+    # any real dataset confirmed to carry positional/sectional history.
+    "FULL_MODEL": [group["group"] for group in FEATURE_GROUPS],
+}
+
+
+def feature_keys_for_profile(profile: str) -> list[str]:
+    if profile not in FEATURE_PROFILES:
+        raise ValueError(f"Unknown feature profile: {profile!r}. Valid profiles: {list(FEATURE_PROFILES)}")
+    included_groups = set(FEATURE_PROFILES[profile])
+    keys: list[str] = []
+    for group in FEATURE_GROUPS:
+        if group["group"] in included_groups:
+            keys.extend(group["feature_keys"])
+    return keys

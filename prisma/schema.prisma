@@ -194,6 +194,39 @@ enum LeakageAuditStatus {
   FAILED
 }
 
+// --- Phase 3C: £0 free-data strategy enums -----------------------------------
+
+// How trustworthy/clear a record's REUSE RIGHTS are — distinct from
+// DataSourceType (REAL/SYNTHETIC/SAMPLE), which is about data authenticity.
+// A record can be REAL and still RESTRICTED (e.g. scraped-then-shared data
+// with no clear redistribution right) or REAL and VERIFIED_OPEN (an
+// official open dataset with a stated permissive licence).
+//   VERIFIED_OPEN        — licence explicitly confirmed permissive (research/open data licence)
+//   PUBLIC_RESEARCH       — published for public research use, licence terms less explicit
+//   COMMUNITY_UNVERIFIED  — from a community source (e.g. a Kaggle upload) with no licence review done
+//   USER_SUPPLIED         — provided directly by a RacingEdge user, provenance as they describe it
+//   UNKNOWN               — provenance not established; default for anything not explicitly classified
+//   RESTRICTED            — reuse rights are clearly incompatible with this project; excluded by default
+enum ProvenanceStatus {
+  VERIFIED_OPEN
+  PUBLIC_RESEARCH
+  COMMUNITY_UNVERIFIED
+  USER_SUPPLIED
+  UNKNOWN
+  RESTRICTED
+}
+
+// Which feature set a ModelVersion was trained against — see
+// python/racingedge_model/features/registry.py's FEATURE_PROFILES. Free
+// datasets are often missing sectional/positional data and sometimes
+// rating/pedigree fields; a model must state up front which profile (and
+// therefore which fields) it actually used, never silently degrade.
+enum FeatureProfile {
+  CORE_FREE_MODEL
+  ENRICHED_FREE_MODEL
+  FULL_MODEL
+}
+
 // ---------------------------------------------------------------------------
 // RACE
 // ---------------------------------------------------------------------------
@@ -701,6 +734,14 @@ model ModelVersion {
   // SYNTHETIC TEST MODEL — NOT FOR BETTING USE.
   isSynthetic Boolean @default(false)
 
+  // Phase 3C: which feature set this model actually used. Free datasets
+  // are often missing sectional/positional/pedigree/rating data — this
+  // states plainly which fields a given model relied on rather than
+  // silently degrading. Defaults to FULL_MODEL to match every model
+  // trained before this field existed (Phase 1/2's synthetic dataset has
+  // full feature coverage).
+  featureProfile FeatureProfile @default(FULL_MODEL)
+
   // Summary metrics captured at training time (JSON) — a point-in-time
   // record. The live dashboard recomputes metrics fresh from stored
   // PredictionSnapshot + ResultEntry rows rather than trusting this blob,
@@ -881,13 +922,20 @@ model DataProvenance {
   entityId   String // id of the row in that table this provenance record describes
   dataDomain String // e.g. "RACE_CARD", "ODDS", "RESULT", "SECTIONAL", "WEATHER", "PLACE_TERMS"
 
-  provider          String // e.g. "csv", "generic-json", "racing-api", "timeform", "betfair"
+  provider          String // e.g. "csv", "generic-json", "racing-api", "timeform", "betfair", "betfair-sp-free", "free-dataset:<name>"
   providerRecordId  String? // the provider's own identifier for this record, if any
   providerTimestamp DateTime? // when the PROVIDER says this data is/was true (may differ from retrievedAt)
   retrievedAt       DateTime  @default(now()) // when RacingEdge fetched/imported it
   effectiveAt       DateTime? // when this data became true in the real world — the point-in-time field
   sourceVersion     String? // provider API/schema version, dataset release version, etc.
   rawPayloadHash    String? // SHA-256 of the raw source payload, for dedup/audit without storing the payload
+
+  // Phase 3C: reuse-rights status, independent of DataSourceType (which is
+  // about authenticity, not reuse rights). Defaults to UNKNOWN so nothing
+  // is silently treated as safely reusable — every consumer must actively
+  // check this, see DatasetReview below and DATA_PROVENANCE.md.
+  provenanceStatus ProvenanceStatus @default(UNKNOWN)
+  sourceUrl        String? // the dataset/API's URL, or a user-supplied source label if no URL exists
 
   importBatch   ImportBatch? @relation(fields: [importBatchId], references: [id])
   importBatchId String?
@@ -898,6 +946,40 @@ model DataProvenance {
   @@index([dataDomain])
   @@index([provider])
   @@index([importBatchId])
+  @@index([provenanceStatus])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3C: DATASET REVIEW
+//
+// A human-legible record of what's known/unknown about a dataset's licence
+// and redistribution rights BEFORE it's imported — deliberately not legal
+// advice, just visibility. One row per external dataset/source (not per
+// record — DataProvenance.provenanceStatus is what actually gates
+// per-record usage).
+// ---------------------------------------------------------------------------
+
+model DatasetReview {
+  id String @id @default(cuid())
+
+  datasetName String
+  source      String // e.g. "Kaggle: uk-ireland-horse-racing-results", "promo.betfair.com/betfairsp"
+
+  licenceStated    String? // whatever licence the source itself declares, verbatim if possible
+  licenceUrl       String?
+  originalProvider String? // who the dataset's uploader says the underlying data originally came from
+
+  redistributionPermitted Boolean? // null = not established
+  researchUsePermitted    Boolean?
+  commercialUsePermitted  Boolean?
+
+  provenanceConfidence ProvenanceStatus @default(UNKNOWN)
+  reviewerNotes        String? // free text — deliberately NOT a legal opinion, just observations
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([provenanceConfidence])
 }
 
 // ---------------------------------------------------------------------------

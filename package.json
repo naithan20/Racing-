@@ -22,7 +22,10 @@
     "model:backtest": "cd python && ../.venv/bin/python -m racingedge_model.backtest",
     "model:predict": "cd python && ../.venv/bin/python -m racingedge_model.predict",
     "model:test": "cd python && ../.venv/bin/python -m pytest",
-    "data:racingapi": "cd python && ../.venv/bin/python -m racingedge_data.cli.import_racing_api"
+    "data:racingapi": "cd python && ../.venv/bin/python -m racingedge_data.cli.import_racing_api",
+    "data:inspect": "cd python && ../.venv/bin/python -m racingedge_data.cli.inspect_dataset",
+    "data:import-free": "cd python && ../.venv/bin/python -m racingedge_data.cli.import_free_dataset",
+    "data:bias-report": "cd python && ../.venv/bin/python -m racingedge_data.cli.bias_analysis"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.9.1",

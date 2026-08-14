@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from datetime import date as date_type, datetime, timezone
 from typing import Callable, Optional
 
-from racingedge_data.canonical import CanonicalRace
+from racingedge_data.canonical import CanonicalRace, CanonicalResult
 from racingedge_data.entity_resolution import resolve_horse
 from racingedge_data.provenance import (
     ProvenanceRecord,
@@ -445,6 +445,9 @@ def _import_one_race(
                 import_batch_id=import_batch_id,
             )
 
+        if runner.result is not None:
+            _insert_result_entry(conn, runner_id, runner.result, now)
+
     for terms in race.place_terms:
         bookmaker_id = _get_or_create_bookmaker(conn, terms.bookmaker_name)
         terms_id = new_id()
@@ -491,6 +494,37 @@ def _import_one_race(
         )
 
     return False
+
+
+def _insert_result_entry(conn: sqlite3.Connection, runner_id: str, result: CanonicalResult, now: str) -> str:
+    """Writes a settled outcome to `ResultEntry` — deliberately never to any
+    of `Runner`'s pre-race fields, so a finishing position, final SP, or BSP
+    can never be mistaken for information available before the race went
+    off (see POINT_IN_TIME_ARCHITECTURE.md and canonical.CanonicalRunner.result).
+    """
+
+    result_id = new_id()
+    conn.execute(
+        'INSERT INTO "ResultEntry" '
+        "(id, runnerId, finishingPosition, finishStatus, beatenDistanceLengths, deadHeat, "
+        "startingPriceDecimal, closingOddsDecimal, bspDecimal, resultStatus, createdAt, updatedAt) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            result_id,
+            runner_id,
+            result.finishing_position,
+            result.finish_status,
+            result.beaten_distance_lengths,
+            int(result.dead_heat),
+            result.starting_price_decimal,
+            result.closing_odds_decimal,
+            result.bsp_decimal,
+            result.result_status,
+            now,
+            now,
+        ),
+    )
+    return result_id
 
 
 def _get_or_create_bookmaker(conn: sqlite3.Connection, name: str) -> str:

@@ -41,6 +41,7 @@ import pandas as pd
 from racingedge_data.dataset_version import (
     classify_readiness,
     create_dataset_version,
+    filter_race_ids_excluding_provenance,
     infer_providers_for_races,
 )
 from racingedge_data.leakage_audit import audit_training_data, save_audit_run
@@ -57,6 +58,7 @@ from racingedge_model.dataset import (
     place_target_col,
 )
 from racingedge_model.evaluate import calibration_buckets, roi_flat_stake, top_ranked_strike_rate, win_metrics
+from racingedge_model.features.registry import feature_keys_for_profile
 from racingedge_model.models.place_models import (
     PlaceModelSet,
     enforce_monotonic_place_probabilities_df,
@@ -78,6 +80,18 @@ def main() -> None:
             "Include SYNTHETIC/SAMPLE races in training, in addition to REAL. "
             "Without this flag, training uses REAL races ONLY (Phase 3A default) "
             "and will abort if there are none yet."
+        ),
+    )
+    parser.add_argument(
+        "--feature-profile",
+        choices=["CORE_FREE_MODEL", "ENRICHED_FREE_MODEL", "FULL_MODEL"],
+        default="FULL_MODEL",
+        help=(
+            "Which feature groups to train on (Phase 3C). CORE_FREE_MODEL and "
+            "ENRICHED_FREE_MODEL exclude the `pace` group (position acquisition / "
+            "transition speed / late sustainability), which needs positional/sectional "
+            "data most free datasets lack — see MODEL_CARD.md. Default FULL_MODEL "
+            "preserves Phase 1/2 behaviour unchanged."
         ),
     )
     parser.add_argument("--notes", default="")
@@ -110,7 +124,19 @@ def main() -> None:
 
     print(f"  {len(dataset)} rows across {dataset['race_id'].nunique()} races")
 
-    race_ids = dataset["race_id"].unique().tolist()
+    race_ids_before_provenance_filter = dataset["race_id"].unique().tolist()
+    race_ids = filter_race_ids_excluding_provenance(conn, race_ids_before_provenance_filter)
+    excluded_race_count = len(race_ids_before_provenance_filter) - len(race_ids)
+    if excluded_race_count > 0:
+        dataset = dataset[dataset["race_id"].isin(race_ids)]
+        print(
+            f"  Excluded {excluded_race_count} race(s) with RESTRICTED provenance "
+            f"(see DATA_PROVENANCE.md) — {len(dataset)} rows across {dataset['race_id'].nunique()} races remain"
+        )
+    if len(dataset) == 0:
+        print("\nEvery race in range was excluded by provenance status. Nothing to train on.")
+        sys.exit(1)
+
     providers = infer_providers_for_races(conn, race_ids)
     dataset_version_id = create_dataset_version(
         conn,
@@ -147,7 +173,9 @@ def main() -> None:
         print("\n*** Training data includes SYNTHETIC races. ***")
         print("*** Resulting models MUST be labelled: SYNTHETIC TEST MODEL — NOT FOR BETTING USE ***\n")
 
-    feat_cols = feature_columns(dataset)
+    profile_keys = set(feature_keys_for_profile(args.feature_profile))
+    feat_cols = [c for c in feature_columns(dataset) if c in profile_keys]
+    print(f"  Feature profile: {args.feature_profile} ({len(feat_cols)} of {len(feature_columns(dataset))} features)")
     preprocessor = FeaturePreprocessor(feat_cols).fit(train_df)
     ood_detector = OutOfDistributionDetector(feat_cols).fit(train_df)
 
@@ -291,6 +319,7 @@ def main() -> None:
                 "trainingRaceCount": int(train_df["race_id"].nunique()),
                 "isSynthetic": is_synthetic,
                 "datasetVersionId": dataset_version_id,
+                "featureProfile": args.feature_profile,
                 "metricsJson": json.dumps(
                     {
                         "win": logistic_test_metrics,
@@ -343,6 +372,7 @@ def main() -> None:
                 "trainingRaceCount": int(train_df["race_id"].nunique()),
                 "isSynthetic": is_synthetic,
                 "datasetVersionId": dataset_version_id,
+                "featureProfile": args.feature_profile,
                 "metricsJson": json.dumps(
                     {
                         "win": primary_metrics,

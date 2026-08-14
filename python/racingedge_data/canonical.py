@@ -82,6 +82,16 @@ class CanonicalRunner:
     # import batch without relying on name matching.
     provider_runner_id: Optional[str] = None
 
+    # Phase 3C: an embedded POST-RACE result, if the source data is a
+    # historical results feed (as opposed to a pre-race card) — e.g. the
+    # free-dataset importer, which imports settled historical races.
+    # Deliberately optional and separate from every pre-race field above:
+    # the importer writes this to `ResultEntry`, never to `Runner`'s own
+    # pre-race fields, so a finishing position or final SP can never be
+    # mistaken for information available before the race went off. See
+    # POINT_IN_TIME_ARCHITECTURE.md.
+    result: Optional[CanonicalResult] = None
+
 
 @dataclass(frozen=True)
 class CanonicalPlaceTerms:
@@ -178,7 +188,12 @@ class CanonicalOddsPoint:
 
 @dataclass(frozen=True)
 class CanonicalResult:
-    provider_runner_id: str
+    """A settled outcome for one runner. When embedded in
+    `CanonicalRunner.result` (as opposed to being reported by a standalone
+    results feed), `provider_runner_id` is redundant with the parent
+    runner's own field and may be left `None`."""
+
+    provider_runner_id: Optional[str] = None
 
     finishing_position: Optional[int] = None
     finish_status: Optional[str] = None  # "WON","PLACED","RAN","PU","UR","F","BD","DSQ", etc.

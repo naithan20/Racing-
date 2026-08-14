@@ -173,3 +173,91 @@ export async function getDataQualityReport(): Promise<DataQualityReport> {
     warnings,
   };
 }
+
+// ---------------------------------------------------------------------------
+// Phase 3C: Feature Availability Matrix
+//
+// Free datasets are often missing fields a licensed feed would carry
+// (sectionals, positional data, pedigree, official ratings). This reports
+// exactly what % of rows actually carry each field — never inferred,
+// never treated as 0 when it has racing meaning — so a model's feature
+// profile (CORE_FREE_MODEL / ENRICHED_FREE_MODEL / FULL_MODEL) can be
+// chosen from real evidence, not assumption. See MODEL_CARD.md.
+// ---------------------------------------------------------------------------
+
+export interface FeatureAvailabilityRow {
+  feature: string;
+  availablePct: number | null;
+  sampleSize: number;
+}
+
+export async function getFeatureAvailabilityMatrix(): Promise<FeatureAvailabilityRow[]> {
+  const [
+    totalRunners,
+    totalRaces,
+    totalFormEntries,
+    horsesWithFormEntry,
+    totalHorses,
+    officialRatingPresent,
+    weightPresent,
+    classPresent,
+    coursePresent,
+    goingPresent,
+    drawPresent,
+    jockeyPresent,
+    trainerPresent,
+    runnersWithSp,
+    runnersWithMarketPrice,
+    formCommentsPresent,
+    formWithSectionals,
+    formWithPositional,
+    headgearPresent,
+    horsesWithSire,
+  ] = await Promise.all([
+    prisma.runner.count(),
+    prisma.race.count(),
+    prisma.formEntry.count(),
+    prisma.formEntry.findMany({ select: { horseId: true }, distinct: ["horseId"] }).then((r) => r.length),
+    prisma.horse.count(),
+    prisma.runner.count({ where: { officialRating: { not: null } } }),
+    prisma.runner.count({ where: { weightLbsTotal: { not: null } } }),
+    prisma.race.count({ where: { raceClass: { not: null } } }),
+    prisma.race.count({ where: { NOT: { racecourse: "" } } }),
+    prisma.race.count({ where: { going: { not: null } } }),
+    prisma.runner.count({ where: { draw: { not: null } } }),
+    prisma.runner.count({ where: { jockeyName: { not: null } } }),
+    prisma.runner.count({ where: { trainerName: { not: null } } }),
+    prisma.resultEntry.count({ where: { startingPriceDecimal: { not: null } } }),
+    prisma.runnerMarketPrice.findMany({ select: { runnerId: true }, distinct: ["runnerId"] }).then((r) => r.length),
+    prisma.formEntry.count({ where: { raceComment: { not: null } } }),
+    prisma.formEntry.count({ where: { hasSectionalData: true } }),
+    prisma.formEntry.count({ where: { hasPositionalData: true } }),
+    prisma.runner.count({ where: { headgear: { not: null } } }),
+    prisma.horse.count({ where: { sireName: { not: null } } }),
+  ]);
+
+  const runnersWithOddsOrSp = Math.max(runnersWithSp, runnersWithMarketPrice);
+
+  const pct = (numerator: number, denominator: number): number | null =>
+    denominator > 0 ? Math.round((numerator / denominator) * 1000) / 10 : null;
+
+  return [
+    { feature: "Current form (any FormEntry)", availablePct: pct(horsesWithFormEntry, totalHorses), sampleSize: totalHorses },
+    { feature: "Official rating", availablePct: pct(officialRatingPresent, totalRunners), sampleSize: totalRunners },
+    { feature: "Weight", availablePct: pct(weightPresent, totalRunners), sampleSize: totalRunners },
+    { feature: "Class", availablePct: pct(classPresent, totalRaces), sampleSize: totalRaces },
+    { feature: "Course", availablePct: pct(coursePresent, totalRaces), sampleSize: totalRaces },
+    // distanceFurlongs is a required (non-nullable) field — always 100% by construction.
+    { feature: "Distance", availablePct: pct(totalRaces, totalRaces), sampleSize: totalRaces },
+    { feature: "Going", availablePct: pct(goingPresent, totalRaces), sampleSize: totalRaces },
+    { feature: "Draw", availablePct: pct(drawPresent, totalRunners), sampleSize: totalRunners },
+    { feature: "Jockey", availablePct: pct(jockeyPresent, totalRunners), sampleSize: totalRunners },
+    { feature: "Trainer", availablePct: pct(trainerPresent, totalRunners), sampleSize: totalRunners },
+    { feature: "Odds / SP", availablePct: pct(runnersWithOddsOrSp, totalRunners), sampleSize: totalRunners },
+    { feature: "Race comments", availablePct: pct(formCommentsPresent, totalFormEntries), sampleSize: totalFormEntries },
+    { feature: "Sectionals", availablePct: pct(formWithSectionals, totalFormEntries), sampleSize: totalFormEntries },
+    { feature: "Positional data", availablePct: pct(formWithPositional, totalFormEntries), sampleSize: totalFormEntries },
+    { feature: "Headgear", availablePct: pct(headgearPresent, totalRunners), sampleSize: totalRunners },
+    { feature: "Pedigree (sire)", availablePct: pct(horsesWithSire, totalHorses), sampleSize: totalHorses },
+  ];
+}

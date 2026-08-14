@@ -1,4 +1,4 @@
-import { getDataQualityReport } from "@/data/dataQuality";
+import { getDataQualityReport, getFeatureAvailabilityMatrix } from "@/data/dataQuality";
 import { formatDate } from "@/lib/format";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -25,7 +25,7 @@ function pctTone(value: number | null): "neutral" | "positive" | "warning" | "ne
 }
 
 export default async function DataQualityPage() {
-  const report = await getDataQualityReport();
+  const [report, featureAvailability] = await Promise.all([getDataQualityReport(), getFeatureAvailabilityMatrix()]);
 
   return (
     <div className="mx-auto max-w-[1200px] space-y-6 px-4 py-6 sm:px-6">
@@ -133,6 +133,36 @@ export default async function DataQualityPage() {
             value={report.unresolvedEntityCount.toLocaleString()}
             hint="pending manual-review queue items"
           />
+        </CardBody>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>Feature Availability Matrix</CardTitle>
+        </CardHeader>
+        <CardBody>
+          <p className="mb-3 text-xs text-text-muted">
+            Free datasets are often missing fields a licensed feed would carry. This is never
+            inferred or treated as zero — a model&apos;s feature profile (CORE_FREE_MODEL /
+            ENRICHED_FREE_MODEL / FULL_MODEL, see MODEL_CARD.md) should be chosen from this
+            evidence, not assumption.
+          </p>
+          <div className="space-y-2">
+            {featureAvailability.map((f) => (
+              <div key={f.feature} className="flex items-center gap-3">
+                <span className="w-44 shrink-0 text-sm text-text-secondary">{f.feature}</span>
+                <div className="h-2 flex-1 overflow-hidden rounded-full bg-bg-elevated">
+                  <div
+                    className="h-full rounded-full bg-accent"
+                    style={{ width: `${f.availablePct ?? 0}%` }}
+                  />
+                </div>
+                <span className="w-16 shrink-0 text-right font-tabular text-sm text-text-primary">
+                  {pctLabel(f.availablePct)}
+                </span>
+              </div>
+            ))}
+          </div>
         </CardBody>
       </Card>
 

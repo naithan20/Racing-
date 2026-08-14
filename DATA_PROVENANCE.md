@@ -1,4 +1,4 @@
-# Data Provenance — Phase 3A/3B
+# Data Provenance — Phase 3A/3B/3C
 
 Every imported record must distinguish **source data** (what a provider actually reported) from
 **derived features** (what RacingEdge computes from it), and must be traceable back to exactly
@@ -81,6 +81,49 @@ for what that limitation does and doesn't affect).
 implicit in the `Bookmaker.name = "Betfair Exchange"` + the row's own `timestamp`; adding a
 provenance row per price point would multiply the table's size for no practical traceability
 benefit over what's already in `RunnerMarketPrice` itself.
+
+## Phase 3C: reuse-rights provenance (`ProvenanceStatus`), separate from authenticity (`DataSourceType`)
+
+Phase 3A/3B's `DataSourceType` (`REAL`/`SYNTHETIC`/`SAMPLE`) answers "is this genuine racing data or
+generated/example data" — a question about **authenticity**. Phase 3C's £0-cost strategy pulls data
+from free/community sources whose reuse rights vary widely, which is an orthogonal question: a race
+can be `REAL` and still have reuse rights that are `UNKNOWN` or explicitly `RESTRICTED`. Conflating
+the two would either wrongly exclude genuine real data from training (if reuse-rights uncertainty
+were folded into authenticity) or wrongly let unclear-licence data train production models silently
+(if authenticity alone gated training) — so `DataProvenance` gained its own, separate
+`provenanceStatus` column:
+
+| Status | Meaning |
+|---|---|
+| `VERIFIED_OPEN` | Source's open-reuse licence was actually read and confirmed (e.g. a stated CC0/CC-BY licence) |
+| `PUBLIC_RESEARCH` | Publicly available and evidently intended for research/analysis use, without a formally confirmed licence |
+| `COMMUNITY_UNVERIFIED` | From a community source (e.g. an unreviewed Kaggle upload) with no licence check performed yet |
+| `USER_SUPPLIED` | Provided directly by a user/maintainer, provenance/licence as they describe it |
+| `UNKNOWN` | Default. No provenance status has been established at all |
+| `RESTRICTED` | Explicitly known to have reuse terms incompatible with this project's use |
+
+`racingedge_data.dataset_version.filter_race_ids_excluding_provenance` — called automatically inside
+`racingedge_model.train`'s dataset-build step — drops every race whose `DataProvenance` row (if any)
+is `RESTRICTED` from training datasets by default. Races with **no** `DataProvenance` row at all
+(Phase 1 seed data, the Phase 2 synthetic generator, anything imported before Phase 3C) are never
+excluded by this filter — it only removes races explicitly classified as restricted, never silently
+distrusts undocumented legacy data. `UNKNOWN` and `COMMUNITY_UNVERIFIED` are not excluded, but the
+free-dataset importer (`racingedge_data.importers.free_dataset_importer.import_free_dataset`)
+attaches an explicit warning to the import outcome whenever either status is used, so the
+uncertainty is visible at import time rather than discovered later.
+
+## Phase 3C: `DatasetReview` — licence review before import
+
+`DatasetReview` (`racingedge_data.dataset_review`) is a separate, lightweight record created
+**before** importing a free/community dataset, capturing what's actually known about its licence:
+dataset name, source, the licence as stated (text/URL), the original data provider, three
+permission flags (`redistributionPermitted`/`researchUsePermitted`/`commercialUsePermitted` — each
+nullable, since "not established" must never look like "false"), a `provenanceConfidence`
+classification (the same `ProvenanceStatus` enum above), and free-text reviewer notes. This module
+deliberately does not attempt to give legal advice or make a licence determination on the
+maintainer's behalf — it only makes whatever licence uncertainty exists **visible**, structured, and
+queryable, rather than left as tribal knowledge or discovered after the fact. See
+`FREE_DATA_SOURCES.md` for how this is meant to be filled in for a real candidate dataset.
 
 ## Querying provenance
 

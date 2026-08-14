@@ -1,4 +1,4 @@
-# RacingEdge — Phase 3B
+# RacingEdge — Phase 3C
 
 RacingEdge is a local-first horse-racing **analysis and decision-support** application. It is not a
 tip generator. It estimates win probability, place probability (against actual bookmaker place
@@ -19,8 +19,15 @@ API subscription credentials and could not reach the provider's documentation si
 full field-level schema, so **no real data was imported, no REAL DatasetVersion exists, and no
 real-data baseline retrain happened.** See [REAL_DATA_BASELINE.md](./REAL_DATA_BASELINE.md) for the
 full, honest account of exactly what was and wasn't possible and precisely what's needed to
-complete it, and [DATA_SOURCES.md](./DATA_SOURCES.md), [DATA_PROVENANCE.md](./DATA_PROVENANCE.md),
-and [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) for the underlying design.
+complete it. **Phase 3C** (this phase) builds a parallel, £0-cost data path — free/community
+datasets, a schema-agnostic inspector, provenance/licence review, a free market-benchmark importer,
+reduced feature profiles, dataset bias analysis, a behavioural-observation dataset, and value-cohort
+backtesting — since it stops at the same kind of boundary as Phase 3B (no local dataset file has
+been supplied), see [REAL_FREE_BASELINE.md](./REAL_FREE_BASELINE.md) and
+[FREE_DATA_SOURCES.md](./FREE_DATA_SOURCES.md) for the honest account of what's built vs. what's
+still pending a manually-downloaded file. See [DATA_SOURCES.md](./DATA_SOURCES.md),
+[DATA_PROVENANCE.md](./DATA_PROVENANCE.md), and
+[POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) for the underlying design.
 
 **There is still no non-trivial amount of real racing data in this system** — every `ModelVersion`
 bundled here remains trained on synthetic data and is explicitly labelled
@@ -71,11 +78,20 @@ python/
                                                     WeatherDataProvider interfaces + csv/generic-json/
                                                     racing-api (real HTTP client, Phase 3B) /
                                                     timeform/betfair (fixture-only) adapters +
-                                                    betfair_historical.py (purchased-file parser)
-    importers/                                      Streaming/chunked/resumable/idempotent import pipeline
-    cli/                                              import_racing_api.py — the `data:racingapi` CLI
-  tests/                  pytest suite, including the explicit anti-leakage test + Phase 3A malicious
-                             leakage scenarios
+                                                    betfair_historical.py (purchased-file parser) +
+                                                    betfair_sp.py (free SP CSV, Phase 3C) /
+                                                    formfav.py (honest non-implementation, Phase 3C)
+    importers/                                      Streaming/chunked/resumable/idempotent import
+                                                       pipeline + free_dataset_importer.py (Phase 3C)
+    cli/                                              import_racing_api.py / inspect_dataset.py /
+                                                        import_free_dataset.py / bias_analysis.py
+    inspector.py                                        Schema-agnostic dataset inspector (Phase 3C)
+    dataset_review.py                                     Licence/provenance review (Phase 3C)
+    bias_analysis.py                                        Dataset bias/skew report (Phase 3C)
+    behavioural_observations.py                              RACINGEDGE_BEHAVIOURAL_DATA (Phase 3C)
+    value_backtest.py                                         Value-cohort backtesting (Phase 3C)
+  tests/                  pytest suite, including the explicit anti-leakage test, Phase 3A malicious
+                             leakage scenarios, and Phase 3C's free-data infrastructure tests
 src/
   app/                  Next.js App Router pages + a couple of route handlers
     data-quality/         Data Quality Dashboard (Phase 3A)
@@ -330,6 +346,11 @@ npm run model:backtest    # backtest the latest model over its held-out test win
 npm run model:test        # pytest — feature/leakage/calibration/monotonicity/versioning tests
 npm run data:racingapi -- --from YYYY-MM-DD --to YYYY-MM-DD   # import real historical races
                            # (Phase 3B) — requires RACING_API_USERNAME/PASSWORD, see DATA_SOURCES.md
+npm run data:inspect -- --file <path>          # (Phase 3C) profile a free dataset file, propose a mapping
+npm run data:import-free -- --file <path> --mapping <path> --source-label ... --provenance-status ...
+                           # (Phase 3C) import a confirmed-mapping free dataset — see DATA_SOURCES.md
+npm run data:bias-report                        # (Phase 3C) missing years/tracks/classes, odds/DNF/
+                                                  # non-runner coverage — see FREE_DATA_SOURCES.md
 ```
 
 Flags (run the underlying Python module directly for these, e.g.
@@ -340,13 +361,22 @@ Flags (run the underlying Python module directly for these, e.g.
   training uses REAL races ONLY** (Phase 3A default) and aborts with a clear message if there are
   none yet — this repository currently has none, so `npm run model:train` will abort unless you
   pass this flag or import real data first.
+- `train.py --feature-profile {CORE_FREE_MODEL,ENRICHED_FREE_MODEL,FULL_MODEL}` — (Phase 3C)
+  restricts training to a feature-GROUP allowlist matching what a free dataset can actually supply.
+  `CORE_FREE_MODEL` excludes pace/headgear-change features (no sectional/positional data in most
+  free sources); `ENRICHED_FREE_MODEL` adds headgear back in; `FULL_MODEL` (default) uses every
+  registered feature. Every `ModelVersion` records which profile trained it.
 - `predict.py --model-version-id ID --date YYYY-MM-DD` — predict a specific model/date
 - `backtest.py --model-version-id ID --start-date ... --end-date ...` — backtest an arbitrary
   window (prints a warning if it overlaps training)
 
 Every `train.py` / `backtest.py` run also: runs the temporal leakage auditor first (aborting on
-FAILED), creates an immutable `DatasetVersion`, reports the minimum-real-data production-readiness
-gate, and reports the market-implied-probability baseline comparison — see
+FAILED), excludes any race whose provenance is classified `RESTRICTED` (Phase 3C, see
+`DATA_PROVENANCE.md`), creates an immutable `DatasetVersion`, reports the minimum-real-data
+production-readiness gate, and reports the market-implied-probability baseline comparison —
+`backtest.py` additionally reports a value-cohort breakdown (Phase 3C, see
+`racingedge_data/value_backtest.py`): actual win rate and flat-stake ROI observed in each
+model-vs-market value-edge bucket. See
 [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) and
 [DATA_SOURCES.md](./DATA_SOURCES.md).
 
@@ -382,8 +412,10 @@ RacingEdge does not scrape any website.
 
 ```bash
 npm run test        # TypeScript (vitest) — 105 tests
-npm run model:test  # Python (pytest) — ~188 tests, incl. the leakage test, Phase 3A malicious
-                    # leakage scenarios, and Phase 3B's Racing API/Betfair-historical adapter tests
+npm run model:test  # Python (pytest) — ~280 tests, incl. the leakage test, Phase 3A malicious
+                    # leakage scenarios, Phase 3B's Racing API/Betfair-historical adapter tests, and
+                    # Phase 3C's inspector/free-importer/provenance/bias-analysis/behavioural-
+                    # observation/value-backtest tests
 ```
 
 TypeScript covers: odds/probability math, place-term settlement, result settlement, CSV
@@ -502,9 +534,69 @@ What Phase 3B **did** build, fully tested against fixtures/mocks (no live accoun
    through `betfair_historical.import_betfair_historical_file` against the already-imported race
    cards.
 
+## Phase 3C — £0 free-data strategy (stopped at the same kind of boundary as Phase 3B)
+
+Phase 3C's brief: build a complete £0-cost path to genuine UK/Ireland historical racing data —
+free/community datasets, a schema-agnostic inspector, mapping-driven import, licence/provenance
+review, a free market-benchmark importer, reduced feature profiles for what free data can actually
+supply, dataset bias reporting, a first-class behavioural-observation dataset, and evaluation-only
+value-cohort backtesting — **without scraping, without paying for anything, and without fabricating
+data**. Every piece of infrastructure listed below is built and tested. **No real free dataset has
+been imported** — per explicit instruction, this repository does not download external datasets
+automatically, and no local dataset file was supplied in this environment (`www.kaggle.com` was
+also unreachable — `EGRESS_BLOCKED` — so even a permitted automated download wasn't possible here
+regardless). **[REAL_FREE_BASELINE.md](./REAL_FREE_BASELINE.md) is the complete, honest record of
+this — read it before assuming any free-real-data numbers exist anywhere in this repository. They
+don't.**
+
+What Phase 3C **did** build, fully tested:
+
+- **Schema-agnostic dataset inspector** (`racingedge_data/inspector.py`,
+  `npm run data:inspect`) — profiles any `.db`/`.sqlite`/`.csv`/`.json`/`.jsonl` file and proposes a
+  column-role mapping with a confidence tier per column, instead of hard-coding against one exact
+  dataset schema.
+- **Mapping-driven free-dataset importer** (`racingedge_data/importers/free_dataset_importer.py`,
+  `npm run data:import-free`) — imports only once every ambiguous column has been explicitly
+  confirmed, requires an explicit `--provenance-status` (no default), and writes any embedded
+  historical result to `ResultEntry` — never to a `Runner`'s own pre-race fields.
+- **Reuse-rights provenance** (`ProvenanceStatus` on `DataProvenance`, `DatasetReview`) — separate
+  from `DataSourceType` (authenticity). `RESTRICTED` data is excluded from training by default;
+  `UNKNOWN`/`COMMUNITY_UNVERIFIED` produce explicit import-time warnings. See
+  [DATA_PROVENANCE.md](./DATA_PROVENANCE.md).
+- **Free Betfair SP historical CSV importer** (`racingedge_data/providers/betfair_sp.py`) — the
+  free (not the paid `historicdata.betfair.com`) CSV format, for post-race CLOSING/SP MARKET
+  BENCHMARK use only — never a pre-race feature. Entity-matches on exact horse name + exact date
+  only; ambiguous matches go to manual review, never guessed.
+- **FormFav enrichment adapter** — an honest non-implementation. `formfav.com`'s documentation was
+  unreachable from this environment and no secondary source could confirm its API contract, so
+  `FormFavProvider` is a tested stub, not a guessed implementation.
+- **Feature Availability Matrix** (`/data-quality`) — per-feature-group availability percentages,
+  computed live, so a missing field is visible evidence rather than a silent assumption.
+- **Reduced feature profiles** (`CORE_FREE_MODEL`/`ENRICHED_FREE_MODEL`/`FULL_MODEL`,
+  `train.py --feature-profile`) — feature-group allowlists matching what free data can genuinely
+  supply, never inventing sectional/positional data a free source doesn't have.
+- **Dataset bias analysis** (`racingedge_data/bias_analysis.py`, `npm run data:bias-report`) —
+  missing years/tracks/classes, Flat/jumps split, favourite/outsider distribution, field size, odds
+  distribution, non-runner/DNF coverage, year-over-year comparison, with explicit (never pass/fail)
+  warnings.
+- **`RACINGEDGE_BEHAVIOURAL_DATA`** (`racingedge_data/behavioural_observations.py`) — a transparent,
+  fixed numeric mapping over `RunnerObservation` tags (break quality, early position,
+  position-acquisition cost, pace-pressure response, 2f transition, final-furlong sustainability,
+  pace-collapse interaction, plus confidence flags), never learned from outcomes, with raw
+  observations kept permanently and insert-only (never overwritten).
+- **Value-cohort backtesting** (`racingedge_data/value_backtest.py`, wired into
+  `racingedge_model/backtest.py`) — buckets runners by model-vs-market value edge and reports actual
+  win rate / ROI per bucket, using model probabilities generated without the target race's own
+  SP/BSP. Evaluation-only — nothing is trained to maximise these figures.
+
+See [FREE_DATA_SOURCES.md](./FREE_DATA_SOURCES.md) for the full source-by-source discovery record
+(RECOMMENDED / USE WITH CAUTION / REJECTED) and exactly what a maintainer needs to supply next.
+
 ## Recommended next phase
 
-1. Phase 3B: acquire and ingest genuine historical racing data via the infrastructure above.
+1. Phase 3B/3C: acquire and ingest genuine historical racing data — either a licensed
+   theracingapi.com subscription (Phase 3B, see `REAL_DATA_BASELINE.md`) or a manually-downloaded
+   free dataset file (Phase 3C, see `REAL_FREE_BASELINE.md` and `FREE_DATA_SOURCES.md`).
 2. Hyperparameter search (currently baseline defaults) and feature selection, still governed by
    validation-only tuning — never test — and only once trained on real data.
 3. Race-shape/pace modelling is currently derived from a horse's own historical positional data;
@@ -516,3 +608,7 @@ What Phase 3B **did** build, fully tested against fixtures/mocks (no live accoun
 6. Consider a Postgres migration once multi-user or hosted deployment is in scope.
 7. Only after real data is trained on and genuine out-of-sample evidence of edge beyond the market
    baseline exists: staking logic. Not before.
+8. Once real free data exists: the CORE_FREE_MODEL vs. CORE_FREE_MODEL+RACINGEDGE_BEHAVIOURAL_DATA
+   observation-learning experiment (Phase 3C section 15) — does transition speed / position-
+   acquisition cost / late sustainability improve out-of-sample predictions? Not yet run; no claim
+   of improvement should be made until it's validated chronologically.

@@ -1,6 +1,10 @@
 import io
+from datetime import date, datetime, timezone
+from typing import Iterator
 
+from racingedge_data.canonical import CanonicalHorse, CanonicalRace, CanonicalResult, CanonicalRunner
 from racingedge_data.importers.import_runner import import_races
+from racingedge_data.providers.base import RaceDataProvider
 from racingedge_data.providers.csv_provider import CsvRaceDataProvider
 
 CSV_HEADER = (
@@ -215,3 +219,94 @@ class TestResume:
         race_b = tmp_db_conn.execute('SELECT * FROM "Race" WHERE raceName = ?', ("Fixture Resume B",)).fetchone()
         assert race_a is None  # was skipped, since resumeCursor said it was already done
         assert race_b is not None
+
+
+class _StaticRaceProvider(RaceDataProvider):
+    name = "fixture-static"
+
+    def __init__(self, races: list[CanonicalRace]):
+        self._races = races
+
+    def fetch_races(self, start_date: date, end_date: date) -> Iterator[CanonicalRace]:
+        for race in self._races:
+            if start_date <= race.date.date() <= end_date:
+                yield race
+
+
+class TestEmbeddedResultImport:
+    def test_embedded_result_writes_to_result_entry_not_runner(self, tmp_db_conn):
+        race = CanonicalRace(
+            provider_race_id="embedded-result-race-1",
+            date=datetime(2026, 5, 1, 14, 0, tzinfo=timezone.utc),
+            race_time="14:00",
+            racecourse="Fixture Course",
+            country="GB",
+            race_name="Fixture Result Race",
+            flat_jumps="FLAT",
+            surface="TURF",
+            distance_furlongs=8.0,
+            handicap_type="NON_HANDICAP",
+            number_of_runners=1,
+            race_status="RESULTED",
+            result_status="CONFIRMED",
+            runners=(
+                CanonicalRunner(
+                    horse=CanonicalHorse(name="Fixture Result Horse"),
+                    provider_runner_id="r1",
+                    result=CanonicalResult(
+                        finishing_position=1,
+                        finish_status="WON",
+                        beaten_distance_lengths=0.0,
+                        starting_price_decimal=4.5,
+                        bsp_decimal=4.8,
+                        result_status="CONFIRMED",
+                    ),
+                ),
+            ),
+        )
+        provider = _StaticRaceProvider([race])
+
+        result = import_races(tmp_db_conn, provider, date(2026, 1, 1), date(2026, 12, 31), source_type="REAL")
+        assert result.success_count == 1
+
+        runner_row = tmp_db_conn.execute(
+            'SELECT * FROM "Runner" WHERE raceId = (SELECT id FROM "Race" WHERE raceName = ?)',
+            ("Fixture Result Race",),
+        ).fetchone()
+        assert runner_row is not None
+        # The result must NOT leak into the Runner's own pre-race fields.
+        assert runner_row["startingPriceDecimal"] is None
+
+        result_row = tmp_db_conn.execute(
+            'SELECT * FROM "ResultEntry" WHERE runnerId = ?', (runner_row["id"],)
+        ).fetchone()
+        assert result_row is not None
+        assert result_row["finishingPosition"] == 1
+        assert result_row["startingPriceDecimal"] == 4.5
+        assert result_row["bspDecimal"] == 4.8
+        assert result_row["resultStatus"] == "CONFIRMED"
+
+    def test_runner_without_result_creates_no_result_entry(self, tmp_db_conn):
+        race = CanonicalRace(
+            provider_race_id="embedded-result-race-2",
+            date=datetime(2026, 5, 2, 14, 0, tzinfo=timezone.utc),
+            race_time="14:00",
+            racecourse="Fixture Course",
+            country="GB",
+            race_name="Fixture No Result Race",
+            flat_jumps="FLAT",
+            surface="TURF",
+            distance_furlongs=8.0,
+            handicap_type="NON_HANDICAP",
+            number_of_runners=1,
+            runners=(CanonicalRunner(horse=CanonicalHorse(name="Fixture No Result Horse"), provider_runner_id="r1"),),
+        )
+        provider = _StaticRaceProvider([race])
+        import_races(tmp_db_conn, provider, date(2026, 1, 1), date(2026, 12, 31), source_type="REAL")
+
+        runner_row = tmp_db_conn.execute(
+            'SELECT * FROM "Runner" WHERE raceId = (SELECT id FROM "Race" WHERE raceName = ?)',
+            ("Fixture No Result Race",),
+        ).fetchone()
+        result_row = tmp_db_conn.execute('SELECT * FROM "ResultEntry" WHERE runnerId = ?', (runner_row["id"],)).fetchone()
+        assert result_row is None

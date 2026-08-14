@@ -32,6 +32,7 @@ import pandas as pd
 
 from racingedge_data.dataset_version import readiness_for_dataset_version
 from racingedge_data.market_baseline import compare_market_vs_model, compute_market_probabilities
+from racingedge_data.value_backtest import value_backtest_report
 from racingedge_model import db
 from racingedge_model.artifacts import load_bundle
 from racingedge_model.config import PLACE_DEPTHS, REPORTS_DIR
@@ -125,6 +126,15 @@ def main() -> None:
         merged, model_prob_col="win_probability", target_col="won", market_prob_col="_market_probability"
     )
 
+    # Value-cohort backtest — buckets runners by how far the model's
+    # win probability (generated as-of-date, without this race's own
+    # SP/BSP) diverged from the market's implied probability, then reports
+    # the ACTUAL outcome/ROI observed in each bucket. Evaluation-only, per
+    # Phase 3C section 18 — see racingedge_data.value_backtest.
+    value_cohorts = value_backtest_report(
+        merged, model_prob_col="win_probability", market_odds_col="startingPriceDecimal", outcome_col="won"
+    )
+
     # ROI breakdowns — evaluation-only, never a training objective.
     def band_roi(series: pd.Series, bins: list[float], labels: list[str]) -> dict:
         banded = pd.cut(series, bins=bins, labels=labels, include_lowest=True)
@@ -153,6 +163,7 @@ def main() -> None:
         "win": win_report,
         "place": place_report,
         "market_baseline_comparison": market_comparison,
+        "value_cohorts": value_cohorts,
         "roi_by_odds_band": roi_by_odds_band,
         "roi_by_confidence_band": roi_by_confidence_band,
         "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -173,6 +184,7 @@ def main() -> None:
         f"model Brier={market_comparison['model']['brier_score']} "
         f"model beats market on Brier={market_comparison['model_beats_market_on_brier']}"
     )
+    print(f"Value cohorts: n={value_cohorts['n_runners_with_model_and_market_odds']} (see report for per-cohort ROI)")
     for depth in PLACE_DEPTHS:
         pr = place_report[f"top{depth}"]
         print(f"Place top{depth}: Brier={pr['brier_score']:.4f} strike rate={pr['win_strike_rate']:.3f}")

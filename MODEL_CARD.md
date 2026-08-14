@@ -25,6 +25,17 @@ retrain happened.** Everything in this model card remains exactly what it was un
 synthetic-data numbers, unchanged. See [REAL_DATA_BASELINE.md](./REAL_DATA_BASELINE.md) for the
 full, honest account of what was attempted and what's needed to actually produce a real baseline.
 
+**Phase 3C update:** Phase 3C built a parallel, £0-cost path to real data — a schema-agnostic
+dataset inspector/importer, reuse-rights provenance tracking (`ProvenanceStatus`/`DatasetReview`,
+separate from the `REAL`/`SYNTHETIC`/`SAMPLE` authenticity classification above), a free Betfair SP
+market-benchmark importer, reduced `CORE_FREE_MODEL`/`ENRICHED_FREE_MODEL` feature profiles, dataset
+bias analysis, a behavioural-observation dataset, and value-cohort backtesting. **The model
+algorithms are, again, unchanged.** No free dataset file was supplied in this environment, so — just
+as with Phase 3B — nothing here was imported and every number in this card remains exactly what it
+was under Phase 2/3A: synthetic-data numbers. See
+[REAL_FREE_BASELINE.md](./REAL_FREE_BASELINE.md) and [FREE_DATA_SOURCES.md](./FREE_DATA_SOURCES.md)
+for the full account.
+
 ## Intended use
 
 - **Research and architecture demonstration.** These models exist to prove the feature
@@ -67,6 +78,25 @@ weighted sums of interpretable sub-scores, documented in full in
 `python/racingedge_model/confidence.py` and `python/racingedge_model/features/evidence.py`. Neither
 is derived from win probability, and win probability is never derived from them.
 
+### Feature profiles (Phase 3C)
+
+Free/community datasets rarely carry every field a licensed feed does — most lack sectional times,
+in-running positional data, and sometimes headgear-change history. Rather than inventing values for
+missing feature groups, `train.py --feature-profile` restricts training to a feature-**group**
+allowlist chosen up front:
+
+| Profile | Feature groups included | Excludes |
+|---|---|---|
+| `CORE_FREE_MODEL` | current form, rating, weight, class, course/distance/going, draw, trainer/jockey, age/experience, evidence density | pace (position acquisition / transition speed / late sustainability), headgear changes |
+| `ENRICHED_FREE_MODEL` | everything in `CORE_FREE_MODEL` + headgear changes | pace |
+| `FULL_MODEL` (default) | every registered feature group | — |
+
+Every `ModelVersion.featureProfile` records which allowlist trained it — this is a **group-level**
+restriction (`racingedge_model/features/registry.py:feature_keys_for_profile`), not a per-feature
+missing-data flag; it exists so a model trained on a free dataset never silently gets fed a whole
+feature group (e.g. sectional-derived pace features) that the underlying data can't actually
+support, rather than each of those ~15 features individually degrading to its missing-data default.
+
 ## Training data
 
 Two possible sources, both visible in `ModelVersion.trainingRowCount` / `isSynthetic`:
@@ -93,8 +123,16 @@ Two possible sources, both visible in `ModelVersion.trainingRowCount` / `isSynth
    race is synthetic, which it always currently is.
 
 **There is currently no non-trivial amount of real racing data in this system.** Anyone connecting
-a licensed feed should retrain from scratch and treat the resulting `ModelVersion.isSynthetic:
-false` models as the first ones worth any real scrutiny.
+a licensed feed (Phase 3B, see `REAL_DATA_BASELINE.md`) or importing a free/community dataset
+(Phase 3C, see `REAL_FREE_BASELINE.md`) should retrain from scratch and treat the resulting
+`ModelVersion.isSynthetic: false` models as the first ones worth any real scrutiny.
+
+**Reuse-rights filtering (Phase 3C).** Every training run also drops any race whose
+`DataProvenance.provenanceStatus` is `RESTRICTED` before building the dataset (races with no
+provenance row at all — all current Phase 1/2 data — are never affected). A dataset imported from a
+free/community source with `UNKNOWN` or `COMMUNITY_UNVERIFIED` reuse-rights confidence is **not**
+excluded from training, but is flagged with an explicit warning at import time — see
+`DATA_PROVENANCE.md`.
 
 ## Evaluation
 

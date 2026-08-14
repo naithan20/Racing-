@@ -147,6 +147,39 @@ def infer_providers_for_races(conn: sqlite3.Connection, race_ids: list[str]) -> 
     return providers if providers else ["legacy-seed-or-generator"]
 
 
+# Phase 3C: reuse-rights are separate from data authenticity (sourceType).
+# A race whose DataProvenance is classified RESTRICTED is excluded from
+# training datasets by default — see prisma/schema.prisma's
+# ProvenanceStatus enum and DATA_PROVENANCE.md.
+DEFAULT_EXCLUDED_PROVENANCE_STATUSES = ("RESTRICTED",)
+
+
+def filter_race_ids_excluding_provenance(
+    conn: sqlite3.Connection,
+    race_ids: list[str],
+    exclude_statuses: tuple[str, ...] = DEFAULT_EXCLUDED_PROVENANCE_STATUSES,
+) -> list[str]:
+    """Drops any race_id with a `DataProvenance` row (entityType='Race')
+    whose `provenanceStatus` is in `exclude_statuses`. Races with NO
+    provenance row at all (Phase 1/2 legacy data, predating Phase 3C) are
+    never excluded by this filter — only races explicitly classified as
+    excluded are removed."""
+
+    if not race_ids or not exclude_statuses:
+        return list(race_ids)
+
+    id_placeholders = ",".join("?" for _ in race_ids)
+    status_placeholders = ",".join("?" for _ in exclude_statuses)
+    rows = conn.execute(
+        f'SELECT DISTINCT entityId FROM "DataProvenance" '
+        f"WHERE entityType = 'Race' AND entityId IN ({id_placeholders}) "
+        f"AND provenanceStatus IN ({status_placeholders})",
+        [*race_ids, *exclude_statuses],
+    ).fetchall()
+    excluded_ids = {r["entityId"] for r in rows}
+    return [rid for rid in race_ids if rid not in excluded_ids]
+
+
 def create_dataset_version(
     conn: sqlite3.Connection,
     name: str,

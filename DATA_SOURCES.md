@@ -1,4 +1,4 @@
-# Data Sources — Phase 3A/3B
+# Data Sources — Phase 3A/3B/3C
 
 RacingEdge's overriding objective for Phase 3A/3B is **data integrity**, not predictive power. This
 document explains exactly where data is allowed to come from, how the provider abstraction works,
@@ -206,6 +206,60 @@ print(result.status, result.success_count, result.duplicate_rows, result.error_c
 file into memory), tracks progress/duplicates/errors on the `ImportBatch` row as it goes, and is
 safe to re-run with the same `idempotency_key`. See
 [DATA_PROVENANCE.md](./DATA_PROVENANCE.md) for what gets recorded about where each row came from.
+
+## Phase 3C: £0 free-data adapters
+
+Everything above (Racing API, purchased Betfair Historical Data, Timeform) costs money. Phase 3C
+adds a second, parallel path that costs nothing — see **`FREE_DATA_SOURCES.md`** for the full
+discovery record (what's RECOMMENDED / USE WITH CAUTION / REJECTED and why) and
+**`REAL_FREE_BASELINE.md`** for exactly how far this path has actually progressed. Summary of what
+shipped:
+
+### Schema-agnostic inspector — `racingedge_data/inspector.py`, `npm run data:inspect`
+
+Free/community datasets (e.g. a Kaggle SQLite/CSV export) never arrive in RacingEdge's exact schema.
+Rather than hard-coding against one specific dataset's column names, `inspect_file` profiles any
+`.db`/`.sqlite`/`.csv`/`.json`/`.jsonl` file — tables, columns, row counts, date coverage — and
+proposes a role mapping (`horse_name`, `official_rating`, `starting_price`, etc.) with a confidence
+tier per column (`high`/`medium`/`low`/unmapped). It writes a reviewable `<name>.mapping.json`
+alongside a full `<name>.inspection.json` profile; nothing is imported at this stage.
+
+### Mapping-driven importer — `racingedge_data/importers/free_dataset_importer.py`, `npm run data:import-free`
+
+Reads a **human-confirmed** mapping file (any column below "high" confidence must be explicitly
+reviewed — the importer raises `MappingNotConfirmedError` listing exactly which columns still need
+review otherwise) and imports via the same canonical/point-in-time pipeline as every other adapter.
+Requires an explicit `--provenance-status` (see `DATA_PROVENANCE.md`) — there is no default, so a
+maintainer can never accidentally import free data without recording a reuse-rights judgement.
+
+### Free Betfair SP historical CSV — `racingedge_data/providers/betfair_sp.py`
+
+Imports the free (not the paid `historicdata.betfair.com` product — see above) Betfair Starting
+Price CSV format for **post-race market benchmarking only**. Labelled the CLOSING/SP MARKET
+BENCHMARK throughout this codebase: BSP/SP is a settlement price, not a snapshot of pre-race live
+odds, and must never be used as a feature for a prediction purportedly made hours before the race —
+see `POINT_IN_TIME_ARCHITECTURE.md`. Entity-matches on (exact normalized horse name + exact race
+date) only, since the CSV's `EVENT_NAME` field doesn't cleanly separate course from race time;
+ambiguous same-day matches are reported unresolved, never guessed. See `FREE_DATA_SOURCES.md` for
+the full verification-status writeup.
+
+### FormFav — `racingedge_data/providers/formfav.py` — honest non-implementation
+
+Phase 3C's brief conditions a FormFav adapter on official documentation confirming a free API tier.
+`formfav.com` was unreachable from this environment (`EGRESS_BLOCKED`) and no secondary source (the
+kind of GitHub-hosted example script that worked for The Racing API in Phase 3B) was found for it —
+so the condition was never met. `FormFavProvider` is a fully-typed, tested stub that reads
+`FORMFAV_API_KEY` and raises `FormFavNotImplementedError` from every method, rather than a guessed
+REST contract.
+
+### `npm run data:bias-report` — dataset bias analysis
+
+`racingedge_data/bias_analysis.py` reports missing years/tracks/classes, Flat/jumps split,
+favourite/outsider distribution, field size, odds distribution, non-runner and DNF coverage, and a
+year-over-year comparison — for whatever's currently imported, or scoped to a `--source-type`/
+`--from`/`--to` range. Renders no verdict ("good"/"bad" dataset), only distributions and explicit
+warnings (e.g. "zero non-runners recorded" — a strong signal a source doesn't represent them at
+all) for a human to judge.
 
 ## Licensing reminder
 
