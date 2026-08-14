@@ -1,9 +1,9 @@
-# Data Sources — Phase 3A
+# Data Sources — Phase 3A/3B
 
-RacingEdge's overriding objective for Phase 3A is **data integrity**, not predictive power. This
+RacingEdge's overriding objective for Phase 3A/3B is **data integrity**, not predictive power. This
 document explains exactly where data is allowed to come from, how the provider abstraction works,
-and — for every adapter that isn't yet connected to a real feed — precisely what credentials or
-files a maintainer needs to supply to make it real.
+and — for every adapter — precisely what credentials or files a maintainer needs to supply to
+actually pull real data through it.
 
 ## The rule: no scraping, ever
 
@@ -15,9 +15,9 @@ RacingEdge does not scrape websites, and never will. The only supported data sou
 3. **Purchased historical datasets** — delivered as files, imported the same way as (2).
 
 If you don't have real credentials or a real dataset, the correct move is to build and fully test
-the provider *interface* against fixtures (which is what this repository does — see below), then
-report exactly what's missing. Fabricating "realistic-looking" racing data and presenting it as
-real is explicitly disallowed by this project's own design.
+the provider *interface* against fixtures (which is what this repository does), then report
+exactly what's missing. Fabricating "realistic-looking" racing data and presenting it as real is
+explicitly disallowed by this project's own design.
 
 ## The provider abstraction
 
@@ -33,78 +33,157 @@ Every data domain has its own narrow interface, defined in
 | `WeatherDataProvider` | Optional weather readings, kept separate from official going |
 
 An adapter implements one or more of these and maps its provider's field names onto the canonical
-dataclasses in `racingedge_data/canonical.py` (`CanonicalRace`, `CanonicalRunner`,
-`CanonicalHorse`, `CanonicalOddsPoint`, `CanonicalFormEntry`, `CanonicalSectionalPoint`,
-`CanonicalWeatherReading`). Nothing downstream of the canonical layer — entity resolution,
-importers, feature engineering — ever needs to know which provider supplied the data.
+dataclasses in `racingedge_data/canonical.py`. Nothing downstream of the canonical layer — entity
+resolution, importers, feature engineering — ever needs to know which provider supplied the data.
 
 ## Adapters shipped in this repository
 
-### `csv_provider.CsvRaceDataProvider` — ready to use today
+### `csv_provider.CsvRaceDataProvider` / `generic_json_provider.GenericJsonRaceDataProvider` — ready to use today
 
-Reads a "wide" CSV (one row per runner, race fields repeated per runner). Column names match the
-`Canonical*` field names in snake_case — see `RACE_FIELDS` / `RUNNER_FIELDS` in
-`racingedge_data/providers/csv_provider.py` for the exact recognized headers. This is the primary
-supported path for a purchased historical dataset delivered as CSV.
+Read a wide-format CSV or a JSON/JSONL file of race objects, respectively. This is the primary
+supported path for a purchased historical dataset delivered as files (see "Importing data" below).
 
-### `generic_json_provider.GenericJsonRaceDataProvider` — ready to use today
+### `racing_api.RacingApiProvider` — the primary Phase 3B target, real HTTP client implemented, **not run against a live account (no credentials in this environment)**
 
-Reads a JSON array or JSON Lines file of race objects (nested `"runners"` array). Unknown keys are
-ignored, so a provider's richer export can be pointed at this adapter without a translation step
-for every field. Use this when a provider's native export is JSON and doesn't flatten cleanly into
-the CSV provider's wide-row format.
+Adapter for **The Racing API** (`theracingapi.com`), a licensed UK & Irish racecards/results
+provider using HTTP Basic Authentication.
 
-### `racing_api.RacingApiProvider` — fixture-only, NOT connected to a live feed
+**What was verified, and how.** Direct access to `https://api.theracingapi.com/documentation` and
+`https://www.theracingapi.com/` was **blocked by this environment's network egress policy**
+(`EGRESS_BLOCKED` on every attempt) while building this adapter — so "the official documentation"
+could not be read directly from this sandbox. Instead, the following facts were confirmed from the
+vendor's own publicly published example scripts on GitHub and their OpenAPI listing in the
+`APIs-guru/openapi-directory` repository (genuine primary sources, just not the live docs site):
 
-**Status: interface built and tested against a fixture (`providers/fixtures/racing_api_sample.json`),
-no real API integration.** This adapter demonstrates non-trivial field translation (provider field
-names like `meeting`, `off_dt`, `type`, `distance_f` mapped to canonical names) for a
-racecards-API-shaped provider. To make it real, a maintainer needs to:
+- Base URL: `https://api.theracingapi.com/v1`
+- Auth: HTTP Basic (username + password)
+- **Rate limit: 2 requests/second, across all plans**
+- Endpoints confirmed to exist: `GET /racecards` (today's/tomorrow's cards), `GET /results`
+  (historical, paginated via `start_date`/`end_date`/`limit`/`skip` + a `total` count in the
+  response — **this is the endpoint the import CLI uses**), `GET /horses/{horse_id}/results`,
+  `GET /horses/search`, `GET /jockeys/*`, `GET /dams/*`, `GET /damsires/*`, `GET /courses`,
+  `GET /courses/regions`.
+- Confirmed response fields: top-level `racecards` / `results` / `runners` / `total` / `query`;
+  per-race `region`, `course`, `off_time`; per-runner `horse`, `horse_id`, `jockey`, `jockey_id`,
+  `trainer`, `trainer_id`, `sex_code`/`sex`.
+- **NOT verified**: official rating, draw, weight, going, race class, distance, sire/dam/damsire,
+  headgear, and starting-price field names. These are almost certainly present in a real response
+  (this is a comprehensive commercial API) but this build could not inspect one to confirm the
+  exact key spellings. `racing_api.py`'s `_UNVERIFIED_RUNNER_FIELD_CANDIDATES` /
+  `_UNVERIFIED_RACE_FIELD_CANDIDATES` list the key names the adapter *tries*, in order — informed
+  guesses based on common UK-racing-data-feed naming conventions, explicitly **not** confirmed
+  facts. **A maintainer with real credentials must verify these against one real response and
+  correct the candidate lists before trusting the resulting data for training.** Nothing in this
+  build's own test suite asserts a specific value for any of these unverified fields — only that a
+  missing key degrades to `None` rather than raising.
 
-1. Obtain a licensed racecards/results API subscription.
-2. Set credentials via environment variables — this build expects `RACING_API_USERNAME` /
-   `RACING_API_PASSWORD` (adjust to whatever the real provider actually requires).
-3. Implement an HTTP client inside `RacingApiProvider.fetch_races` that calls the provider's
-   documented endpoint for a date range and returns JSON. **The field names used in the fixture are
-   illustrative and have not been verified against any real provider's actual API — update
-   `_map_race` / `_map_runner` in `racing_api.py` to match the real contract once you have it.**
+**What's actually implemented**: a real HTTP client (`_RacingApiHttpClient`, using `requests`) with
+the confirmed rate limit, `limit`/`skip`/`total` pagination, and retry with exponential backoff on
+429/5xx/connection errors (5 attempts). `RacingApiProvider.fetch_races` pages through `/results` for
+a date range — the correct endpoint for historical ingestion.
 
-### `timeform.TimeformProvider` — fixture-only, NOT connected to a live feed
+**To go live**, set two environment variables (a licensed theracingapi.com subscription):
 
-Same status as above, for historical form/ratings data (`HistoricalResultsProvider`). Requires a
-licensed Timeform (or equivalent) data feed subscription; this build expects a `TIMEFORM_API_KEY`
-environment variable and has no HTTP client implemented. See
-`providers/fixtures/timeform_sample.json` for the illustrative fixture shape and
-`TimeformProvider.fetch_form_entries` for where to add a real client.
+```bash
+export RACING_API_USERNAME="..."
+export RACING_API_PASSWORD="..."
+```
 
-### `betfair.BetfairProvider` — fixture-only, NOT connected to a live feed
+Neither is set anywhere in this repository or environment. Without them,
+`RacingApiProvider.fetch_races` raises `ProviderConfigurationError` (or, for the CLI, prints a
+clear message and exits) rather than falling back to fixtures or fabricating data.
 
-Same status, for exchange odds (`OddsDataProvider`) — the one adapter that demonstrates
-exchange-specific fields (back/lay prices, matched volume, market status) that fixed-odds
-bookmaker feeds don't have. Requires a Betfair (or equivalent exchange) API app key and session
-token; this build expects `BETFAIR_APP_KEY` / `BETFAIR_SESSION_TOKEN` and has no client
-implemented. See `providers/fixtures/betfair_sample.json` and `BetfairProvider.fetch_odds`.
+### `timeform.TimeformProvider` — fixture-only, not this phase's target
 
-## Exactly what's needed to go from fixture-only to real
+Unchanged from Phase 3A: interface built and tested against a fixture, no live HTTP client. Needs a
+licensed Timeform (or equivalent) subscription (`TIMEFORM_API_KEY`) and an implemented client in
+`TimeformProvider.fetch_form_entries` before it can pull real data. Not prioritised in Phase 3B
+since Racing API's `/results` already carries historical results and runners.
 
-For each of the three stub adapters above:
+### `betfair.BetfairProvider` — fixture-only live-feed shape, not this phase's target
 
-1. **Credentials** — obtain the licensed subscription and the specific environment variables noted
-   in that adapter's docstring.
-2. **Real API documentation** — the field-mapping constants in each adapter file were written to
-   demonstrate the translation pattern, not copied from a verified real API contract. Update them
-   once you have the provider's actual documented response shape.
-3. **An HTTP client** — none of the three stub adapters make a network call. Add one (e.g. using
-   `requests` or `httpx`), respecting the provider's rate limits and terms of service.
-4. **Re-run the adapter's tests** (`python/tests/test_providers.py`) against the fixture to confirm
-   the field-mapping logic still holds, then add an integration test (not committed here, since it
-   would require real credentials) that exercises the live client.
+Unchanged from Phase 3A: models a live/streaming exchange feed shape, needs `BETFAIR_APP_KEY` /
+`BETFAIR_SESSION_TOKEN` and a real streaming client. **For historical exchange odds, use
+`betfair_historical.py` instead — see below.**
 
-No other code needs to change: once an adapter yields `CanonicalRace` / `CanonicalFormEntry` /
-`CanonicalOddsPoint` objects, `racingedge_data.importers.import_runner.import_races` and the rest
-of the pipeline work identically regardless of where the data came from.
+### `betfair_historical.py` — parser for *purchased* Betfair Historical Data files (Phase 3B)
 
-## Importing data once you have a real source
+Separate from `betfair.py` (which models a *live* exchange feed): this module parses files a
+maintainer has already **purchased and downloaded** from `historicdata.betfair.com` and extracted
+locally. It makes no network call and this build purchased nothing automatically, per instruction.
+
+**Format**: Betfair Historical Data files are recordings of the Exchange Stream API's "market
+change message" (`mcm`) wire format — newline-delimited JSON, one message per line, optionally
+gzip-compressed. This is a long-stable, extremely widely documented public format (used by
+`betfairlightweight`, `flumine`, and countless other independent clients), unlike Racing API's
+proprietary REST field names above — this build has high confidence in it without needing live
+verification. Each message carries:
+
+- `pt` — publish time in **epoch milliseconds**, the genuine timestamp of that price update. Every
+  `CanonicalOddsPoint` this parser produces carries this exact timestamp, never an inferred one.
+- `mc[].marketDefinition.runners[]` — `{id, name}` pairs; Betfair's `id` (selection id) is an
+  exchange-internal identifier with no meaning outside Betfair, so `name` is the only link back to
+  a horse's real identity.
+- `mc[].rc[]` — per-selection price changes: `id` (selection id), `ltp` (last traded price),
+  `atb`/`atl` (available-to-back/lay ladders), `tv` (total matched volume).
+
+**Mapping to runner identities**: `import_betfair_historical_file` resolves each selection's
+`marketDefinition` name through `entity_resolution.resolve_horse` (exact-normalized-name matching
+— never fuzzy) to find the corresponding RacingEdge `Runner`. **This module does not create new
+races/runners** — the exchange feed alone doesn't carry going/class/distance/etc., so a race's card
+must already be imported (e.g. via Racing API) before its odds history can be attached. A selection
+that can't be resolved (unknown horse name, or a horse with no `Runner` row yet) is reported in the
+returned `unresolved` list — never guessed or silently dropped.
+
+**What you need to actually use this**:
+
+1. A Betfair Historical Data purchase from `historicdata.betfair.com` covering horse racing (WIN
+   market type) for the desired date range. **This environment could not reach
+   `historicdata.betfair.com` or `support.developer.betfair.com` to confirm current plan
+   names/pricing/file packaging** (both `EGRESS_BLOCKED`) — confirm current tiers (historically
+   BASIC/ADVANCED/PRO) and exact bundling at purchase time.
+2. Extract the purchased archive with standard tools (`tar -xf ...`, `gunzip ...` as needed) —
+   this module parses already-extracted, newline-delimited-JSON market files; it does not do
+   archive extraction.
+3. Import the race card first (Racing API or a CSV/JSON file), then:
+
+```python
+from racingedge_data.providers.betfair_historical import import_betfair_historical_file
+from racingedge_model import db
+
+conn = db.get_connection()
+inserted, unresolved = import_betfair_historical_file(conn, "1.999000001.jsonl.gz")
+conn.commit()
+print(f"{inserted} price points inserted, {len(unresolved)} selections unresolved")
+for u in unresolved:
+    print(u)  # UnresolvedSelection(market_id=..., selection_id=..., horse_name=..., reason=...)
+```
+
+**Do not block Racing API ingestion on this being available** — Phase 3B's baseline retrain uses
+starting prices already carried in `/results` (once verified — see the unverified-fields note
+above), not exchange price histories.
+
+## Importing race cards + results once you have credentials
+
+```bash
+npm run data:racingapi -- --from 2024-01-01 --to 2026-08-01
+```
+
+or equivalently, directly:
+
+```bash
+RACING_API_USERNAME=... RACING_API_PASSWORD=... \
+  python -m racingedge_data.cli.import_racing_api --from 2024-01-01 --to 2026-08-01
+```
+
+This command is resumable (`--resume-batch-id`), idempotent (defaults to a key derived from the
+date range), rate-limit aware (respects the confirmed 2 req/s ceiling), pagination-aware, retries
+with exponential backoff, reports progress live, logs failed records without aborting the whole
+run, skips duplicates, and leaves a full `ImportBatch` audit trail. Without
+`RACING_API_USERNAME`/`RACING_API_PASSWORD` set, it prints exactly that and exits — it does not
+fall back to synthetic/sample data.
+
+For a CSV/JSON file (a purchased dataset, or any other provider's export):
 
 ```python
 from datetime import date
@@ -125,8 +204,7 @@ print(result.status, result.success_count, result.duplicate_rows, result.error_c
 
 `import_races` streams the provider's races one at a time (never loading a whole 1,000,000-row
 file into memory), tracks progress/duplicates/errors on the `ImportBatch` row as it goes, and is
-safe to re-run with the same `idempotency_key`. See `python/racingedge_data/importers/import_runner.py`
-for full behaviour (resume support, failed-row reporting) and
+safe to re-run with the same `idempotency_key`. See
 [DATA_PROVENANCE.md](./DATA_PROVENANCE.md) for what gets recorded about where each row came from.
 
 ## Licensing reminder

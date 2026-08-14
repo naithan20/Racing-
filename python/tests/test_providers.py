@@ -2,6 +2,7 @@ import io
 import json
 from datetime import date
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -11,7 +12,7 @@ from racingedge_data.providers.base import ProviderConfigurationError
 from racingedge_data.providers.betfair import BetfairProvider
 from racingedge_data.providers.csv_provider import CsvRaceDataProvider
 from racingedge_data.providers.generic_json_provider import GenericJsonRaceDataProvider
-from racingedge_data.providers.racing_api import RacingApiProvider
+from racingedge_data.providers.racing_api import RacingApiHttpError, RacingApiProvider, _RacingApiHttpClient
 from racingedge_data.providers.timeform import TimeformProvider
 
 FIXTURES_DIR = Path(racing_api.__file__).resolve().parent / "fixtures"
@@ -199,3 +200,115 @@ class TestFixtureBackedStubAdapters:
         provider = RacingApiProvider(fixture_path=tmp_path / "does_not_exist.json")
         with pytest.raises(ProviderConfigurationError, match="not found"):
             list(provider.fetch_races(date(2020, 1, 1), date(2030, 1, 1)))
+
+
+def _mock_response(status_code: int, json_body: dict | None = None) -> MagicMock:
+    response = MagicMock()
+    response.status_code = status_code
+    response.json.return_value = json_body or {}
+    response.raise_for_status = MagicMock()
+    return response
+
+
+class TestRacingApiLiveClient:
+    """Tests the live HTTP client's pagination, rate limiting, and retry
+    behaviour against a MOCKED `requests.get` — no real network call is
+    ever made in this test suite (there are no live credentials in this
+    environment to make one with)."""
+
+    def test_provider_uses_live_client_when_credentials_are_present(self):
+        provider = RacingApiProvider(username="fixture-user", password="fixture-pass")
+        assert provider._has_live_credentials() is True
+
+    def test_provider_falls_back_to_fixture_without_credentials(self):
+        provider = RacingApiProvider(fixture_path=FIXTURES_DIR / "racing_api_sample.json")
+        assert provider._has_live_credentials() is False
+
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    def test_paginates_through_results_using_skip_and_total(self, mock_get, _mock_sleep, monkeypatch):
+        monkeypatch.setattr(racing_api, "RESULTS_PAGE_SIZE", 1)
+        page_1 = _mock_response(
+            200,
+            {
+                "total": 2,
+                "results": [
+                    {
+                        "race_id": "r1",
+                        "off_time": "2026-01-05T14:30:00",
+                        "course": "Fixture Course",
+                        "region": "GB",
+                        "runners": [],
+                    }
+                ],
+            },
+        )
+        page_2 = _mock_response(
+            200,
+            {
+                "total": 2,
+                "results": [
+                    {
+                        "race_id": "r2",
+                        "off_time": "2026-01-06T14:30:00",
+                        "course": "Fixture Course",
+                        "region": "GB",
+                        "runners": [],
+                    }
+                ],
+            },
+        )
+        mock_get.side_effect = [page_1, page_2]
+
+        provider = RacingApiProvider(username="fixture-user", password="fixture-pass")
+        races = list(provider.fetch_races(date(2026, 1, 1), date(2026, 1, 31)))
+
+        assert [r.provider_race_id for r in races] == ["r1", "r2"]
+        assert mock_get.call_count == 2
+        first_call_params = mock_get.call_args_list[0].kwargs["params"]
+        second_call_params = mock_get.call_args_list[1].kwargs["params"]
+        assert first_call_params["skip"] == 0
+        assert second_call_params["skip"] == racing_api.RESULTS_PAGE_SIZE
+
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    def test_401_raises_configuration_error_not_a_retry(self, mock_get, _mock_sleep):
+        mock_get.return_value = _mock_response(401, {})
+        provider = RacingApiProvider(username="wrong-user", password="wrong-pass")
+
+        with pytest.raises(ProviderConfigurationError, match="401"):
+            list(provider.fetch_races(date(2026, 1, 1), date(2026, 1, 31)))
+
+        assert mock_get.call_count == 1  # no retry on an auth failure
+
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    def test_500_is_retried_then_succeeds(self, mock_get, _mock_sleep):
+        mock_get.side_effect = [
+            _mock_response(500, {}),
+            _mock_response(200, {"total": 0, "results": []}),
+        ]
+        provider = RacingApiProvider(username="fixture-user", password="fixture-pass")
+        races = list(provider.fetch_races(date(2026, 1, 1), date(2026, 1, 31)))
+
+        assert races == []
+        assert mock_get.call_count == 2
+
+    @patch("time.sleep", return_value=None)
+    @patch("requests.get")
+    def test_exhausting_retries_raises_racing_api_http_error(self, mock_get, _mock_sleep):
+        mock_get.return_value = _mock_response(503, {})
+        client = _RacingApiHttpClient("fixture-user", "fixture-pass", max_retries=3)
+
+        with pytest.raises(RacingApiHttpError):
+            client.get("/results", params={})
+
+        assert mock_get.call_count == 3
+
+    def test_unverified_runner_fields_degrade_to_none_when_absent(self):
+        from racingedge_data.providers.racing_api import _map_runner
+
+        runner = _map_runner({"horse": "Fixture Horse", "horse_id": "h1"})
+        assert runner.official_rating is None
+        assert runner.draw is None
+        assert runner.headgear is None

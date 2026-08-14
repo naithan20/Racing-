@@ -1,4 +1,4 @@
-# RacingEdge — Phase 3A
+# RacingEdge — Phase 3B
 
 RacingEdge is a local-first horse-racing **analysis and decision-support** application. It is not a
 tip generator. It estimates win probability, place probability (against actual bookmaker place
@@ -9,14 +9,18 @@ judged honestly.
 **Phase 1** shipped the architecture, database, UI and result-tracking system with no probability
 model. **Phase 2** added a transparent, trainable, backtestable baseline model on top of that
 architecture — see [MODEL_CARD.md](./MODEL_CARD.md) for its intended use, design, and limitations
-before reading anything into its numbers. **Phase 3A** (this phase) does **not** touch the Phase 2
-model algorithms at all — its overriding objective is **data integrity**: a provider-agnostic
-ingestion architecture, point-in-time-correct historical data, entity resolution, dataset
-versioning, a temporal leakage auditor, and a real/synthetic/sample separation gate, so the model
-can eventually be trained on genuine historical racing data without any risk of a historical
-prediction seeing information from after its own race. See
-[DATA_SOURCES.md](./DATA_SOURCES.md), [DATA_PROVENANCE.md](./DATA_PROVENANCE.md), and
-[POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) for the full Phase 3A design.
+before reading anything into its numbers. **Phase 3A** built the data-integrity infrastructure —
+provider-agnostic ingestion, point-in-time-correct historical data, entity resolution, dataset
+versioning, a temporal leakage auditor, and a real/synthetic/sample separation gate — without
+touching the Phase 2 model algorithms. **Phase 3B** (this phase) attempted to connect that
+infrastructure to a real provider (The Racing API) and produce the first REAL `DatasetVersion`.
+**It stopped at the credential boundary, exactly as instructed**: this environment has no Racing
+API subscription credentials and could not reach the provider's documentation site to verify its
+full field-level schema, so **no real data was imported, no REAL DatasetVersion exists, and no
+real-data baseline retrain happened.** See [REAL_DATA_BASELINE.md](./REAL_DATA_BASELINE.md) for the
+full, honest account of exactly what was and wasn't possible and precisely what's needed to
+complete it, and [DATA_SOURCES.md](./DATA_SOURCES.md), [DATA_PROVENANCE.md](./DATA_PROVENANCE.md),
+and [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md) for the underlying design.
 
 **There is still no non-trivial amount of real racing data in this system** — every `ModelVersion`
 bundled here remains trained on synthetic data and is explicitly labelled
@@ -65,8 +69,11 @@ python/
     providers/                                    RaceDataProvider/HistoricalResultsProvider/
                                                     OddsDataProvider/SectionalDataProvider/
                                                     WeatherDataProvider interfaces + csv/generic-json/
-                                                    racing-api/timeform/betfair adapters
+                                                    racing-api (real HTTP client, Phase 3B) /
+                                                    timeform/betfair (fixture-only) adapters +
+                                                    betfair_historical.py (purchased-file parser)
     importers/                                      Streaming/chunked/resumable/idempotent import pipeline
+    cli/                                              import_racing_api.py — the `data:racingapi` CLI
   tests/                  pytest suite, including the explicit anti-leakage test + Phase 3A malicious
                              leakage scenarios
 src/
@@ -321,6 +328,8 @@ npm run model:train       # train + calibrate both win models and the 5 place mo
 npm run model:predict     # predict for upcoming (SCHEDULED/DELAYED) races using the latest model
 npm run model:backtest    # backtest the latest model over its held-out test window
 npm run model:test        # pytest — feature/leakage/calibration/monotonicity/versioning tests
+npm run data:racingapi -- --from YYYY-MM-DD --to YYYY-MM-DD   # import real historical races
+                           # (Phase 3B) — requires RACING_API_USERNAME/PASSWORD, see DATA_SOURCES.md
 ```
 
 Flags (run the underlying Python module directly for these, e.g.
@@ -343,8 +352,8 @@ gate, and reports the market-implied-probability baseline comparison — see
 
 ## Data import
 
-Three supported paths, all going through the same validated schema
-(`src/data/importSchema.ts`) and the same persistence function (`src/data/importRaces.ts`):
+For the Phase 1/2 UI (small, manual/ad-hoc): three paths, all going through the same validated
+schema (`src/data/importSchema.ts`) and the same persistence function (`src/data/importRaces.ts`):
 
 1. **Manual entry** — `/races/new`, a form for the race plus a quick-entry runner list.
 2. **CSV import** — `/import`, one row per **runner**; rows sharing the same
@@ -352,8 +361,11 @@ Three supported paths, all going through the same validated schema
    from the Import page (`GET /import/template`).
 3. **JSON import** — `/import`, `{ "races": [ { ...race fields, "runners": [...] } ] }`.
 
-RacingEdge does not scrape any website. A licensed/API data feed can be added later by writing a
-new source that produces the same `RaceImport[]` shape and calling `importRaces()`.
+For real, large-scale historical ingestion (Phase 3A/3B, hundreds/thousands of races): the Python
+`racingedge_data` package — see [DATA_SOURCES.md](./DATA_SOURCES.md) and
+`npm run data:racingapi -- --from ... --to ...` above.
+
+RacingEdge does not scrape any website.
 
 ## Sample & synthetic data
 
@@ -370,8 +382,8 @@ new source that produces the same `RaceImport[]` shape and calling `importRaces(
 
 ```bash
 npm run test        # TypeScript (vitest) — 105 tests
-npm run model:test  # Python (pytest) — ~170 tests, incl. the leakage test and Phase 3A malicious
-                    # leakage scenarios (test_malicious_leakage_scenarios.py)
+npm run model:test  # Python (pytest) — ~188 tests, incl. the leakage test, Phase 3A malicious
+                    # leakage scenarios, and Phase 3B's Racing API/Betfair-historical adapter tests
 ```
 
 TypeScript covers: odds/probability math, place-term settlement, result settlement, CSV
@@ -429,20 +441,66 @@ integrity. What was built:
   coverage/missingness/provenance reporting, and a point-in-time viewer for any historical race,
   runner, or horse timeline.
 
-Run `npm run model:test` to see the ~170 Python tests, including
+Run `npm run model:test` to see the ~188 Python tests, including
 `python/tests/test_malicious_leakage_scenarios.py` — deliberately malicious cases (future-dated
 FormEntry rows, post-off-time odds, out-of-order place-terms history, self-referential leaks) each
 confirmed blocked.
 
-### Next steps to connect real data
+## Phase 3B — connecting a real provider (stopped at the credential boundary)
 
-1. Obtain a licensed racecards/results/odds feed (or a purchased historical dataset as CSV/JSON) —
-   see [DATA_SOURCES.md](./DATA_SOURCES.md) for exactly what each stub adapter still needs.
-2. Import it with `source_type="REAL"` via `racingedge_data.importers.import_runner.import_races`.
-3. Run `python -m racingedge_model.train` (REAL-only by default) once there's enough data to be
-   meaningful — it will report `RESEARCH MODEL — INSUFFICIENT HISTORICAL DATA` honestly until the
-   10,000-race / 100,000-runner gate is cleared.
-4. Only then does Phase 3B (further modelling work against real data) make sense.
+Phase 3B's brief: connect the Phase 3A infrastructure to The Racing API, ingest real UK & Irish
+historical races, create the first REAL `DatasetVersion`, and re-run the *existing, unchanged*
+Phase 2 models against it as an honest baseline. **This did not complete — by design.** There are
+no Racing API credentials anywhere in this environment, and this environment's network egress
+policy blocks `api.theracingapi.com` / `www.theracingapi.com` (so even the documentation couldn't
+be read directly). Per explicit instruction, work stopped at that boundary rather than fabricating
+a response or substituting synthetic data. **[REAL_DATA_BASELINE.md](./REAL_DATA_BASELINE.md) is
+the complete, honest record of this — read it before assuming any real-data numbers exist
+anywhere in this repository. They don't.**
+
+What Phase 3B **did** build, fully tested against fixtures/mocks (no live account used):
+
+- **`RacingApiProvider`** (`python/racingedge_data/providers/racing_api.py`) — a real HTTP client
+  (`requests`-based) implementing the base URL, HTTP Basic Auth, `/results` pagination
+  (`limit`/`skip`/`total`), the confirmed 2 req/s rate limit, and retry with exponential backoff on
+  429/5xx — all verified against the vendor's own published example scripts (direct docs access was
+  blocked; see the module's docstring and [DATA_SOURCES.md](./DATA_SOURCES.md) for exactly what's
+  confirmed vs. best-effort/unverified in the field mapping).
+- **`npm run data:racingapi -- --from YYYY-MM-DD --to YYYY-MM-DD`** (or
+  `python -m racingedge_data.cli.import_racing_api`) — resumable, idempotent, rate-limit-aware,
+  pagination-aware, retrying, progress-reporting, failed-record-logging, duplicate-handling,
+  audit-trailed. Stops immediately with a clear message if `RACING_API_USERNAME` /
+  `RACING_API_PASSWORD` aren't set — verified in this repository's own test suite AND by actually
+  running the command in this environment (see REAL_DATA_BASELINE.md for the transcript).
+- **`betfair_historical.py`** — a parser for *purchased* Betfair Historical Data files (the
+  well-documented Exchange Stream `mcm`/`marketDefinition`/`rc` wire format), resolving selections
+  to RacingEdge runners via exact-normalized-name matching, never fuzzy. Not blocking Racing API
+  ingestion, per instruction — see [DATA_SOURCES.md](./DATA_SOURCES.md) for exactly what purchase
+  and file-extraction steps a maintainer needs to complete before using it.
+
+### Next steps to actually get real data flowing
+
+1. **Obtain a licensed theracingapi.com subscription** and set `RACING_API_USERNAME` /
+   `RACING_API_PASSWORD` as environment variables.
+2. Run `npm run data:racingapi -- --from 2024-01-01 --to 2026-08-01` (or any date range the
+   subscription covers). Watch the first response and **verify/correct**
+   `_UNVERIFIED_RUNNER_FIELD_CANDIDATES` / `_UNVERIFIED_RACE_FIELD_CANDIDATES` in `racing_api.py`
+   against what the API actually returns for official rating, draw, weight, going, race class,
+   distance, pedigree, headgear, and starting price — these were informed guesses, not confirmed.
+3. The temporal leakage auditor (`racingedge_data.leakage_audit.audit_training_data`) runs
+   automatically at the start of `python -m racingedge_model.train` and aborts training if it
+   reports FAILED — no separate step needed, but it can also be called directly for an
+   ad-hoc check.
+4. Create the REAL `DatasetVersion` (the import CLI does this automatically via
+   `racingedge_data.dataset_version.create_dataset_version`) and check the readiness gate
+   (`racingedge_data.dataset_version.classify_readiness`, ≥10,000 races / ≥100,000 runners).
+5. Run `python -m racingedge_model.train` (REAL-only by default, no flag needed once real data
+   exists) and report the results — chronological 70/15/15 split, Brier/log loss/AUC for both win
+   models, top2–top6 place calibration, and the market-baseline comparison — honestly, in an
+   updated `REAL_DATA_BASELINE.md`, without optimising anything based on them.
+6. (Optional, not blocking) Purchase Betfair Historical Data for exchange-odds depth and run it
+   through `betfair_historical.import_betfair_historical_file` against the already-imported race
+   cards.
 
 ## Recommended next phase
 

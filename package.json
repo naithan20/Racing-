@@ -21,7 +21,8 @@
     "model:train": "cd python && ../.venv/bin/python -m racingedge_model.train",
     "model:backtest": "cd python && ../.venv/bin/python -m racingedge_model.backtest",
     "model:predict": "cd python && ../.venv/bin/python -m racingedge_model.predict",
-    "model:test": "cd python && ../.venv/bin/python -m pytest"
+    "model:test": "cd python && ../.venv/bin/python -m pytest",
+    "data:racingapi": "cd python && ../.venv/bin/python -m racingedge_data.cli.import_racing_api"
   },
   "dependencies": {
     "@prisma/adapter-better-sqlite3": "^7.9.1",

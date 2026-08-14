@@ -18,6 +18,13 @@ See [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md),
 [DATA_PROVENANCE.md](./DATA_PROVENANCE.md), and [DATA_SOURCES.md](./DATA_SOURCES.md) for the full
 Phase 3A design.
 
+**Phase 3B update:** Phase 3B attempted to connect a real provider (The Racing API) and produce a
+REAL `DatasetVersion` for a genuine baseline retrain. **It did not — there are no Racing API
+credentials in this environment, so nothing was imported, no REAL `DatasetVersion` exists, and no
+retrain happened.** Everything in this model card remains exactly what it was under Phase 2/3A:
+synthetic-data numbers, unchanged. See [REAL_DATA_BASELINE.md](./REAL_DATA_BASELINE.md) for the
+full, honest account of what was attempted and what's needed to actually produce a real baseline.
+
 ## Intended use
 
 - **Research and architecture demonstration.** These models exist to prove the feature

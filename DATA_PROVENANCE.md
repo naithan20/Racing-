@@ -1,4 +1,4 @@
-# Data Provenance — Phase 3A
+# Data Provenance — Phase 3A/3B
 
 Every imported record must distinguish **source data** (what a provider actually reported) from
 **derived features** (what RacingEdge computes from it), and must be traceable back to exactly
@@ -64,6 +64,23 @@ auditable — see `python/racingedge_data/entity_resolution.py`.
 - **Raw payloads themselves** are hashed, not stored (see above) — if you need the literal original
   file, keep it outside the database (e.g. wherever your purchased dataset was delivered) and
   reference it via `sourceVersion` / `providerRecordId`.
+
+## Phase 3B: provenance for the Racing API and Betfair historical imports
+
+`racingedge_data.importers.import_runner.import_races`, driven by
+`racingedge_data.providers.racing_api.RacingApiProvider`, records `provider="racing-api"` on every
+`DataProvenance` row it writes, with `providerRecordId` set to the race's `race_id` from the API
+response and `effectiveAt` set to the race's own off-time (Racing API's `/results` endpoint only
+returns settled races, so there is no finer-grained "when did this field become true" timestamp
+available from the API itself — see [POINT_IN_TIME_ARCHITECTURE.md](./POINT_IN_TIME_ARCHITECTURE.md)
+for what that limitation does and doesn't affect).
+
+`racingedge_data.providers.betfair_historical.import_betfair_historical_file` does **not** write
+`DataProvenance` rows for the `RunnerMarketPrice` rows it inserts (unlike the main import pipeline)
+— odds price points are a high-volume, already-timestamped time series where the provenance is
+implicit in the `Bookmaker.name = "Betfair Exchange"` + the row's own `timestamp`; adding a
+provenance row per price point would multiply the table's size for no practical traceability
+benefit over what's already in `RunnerMarketPrice` itself.
 
 ## Querying provenance
 

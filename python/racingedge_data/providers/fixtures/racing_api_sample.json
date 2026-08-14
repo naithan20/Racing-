@@ -1,15 +1,13 @@
 {
-  "_fixture_note": "Illustrative test fixture only, NOT real racing data. Structurally plausible sample shaped after a generic racecards API, used to exercise RacingApiProvider's field-mapping logic in tests. Course/horse/people names are fictitious and prefixed 'Fixture' to make that unmistakable.",
-  "racecards": [
+  "_fixture_note": "Illustrative test fixture only, NOT real racing data and NOT a verified real API response. Field names 'course', 'region', 'off_time', 'runners', 'horse', 'horse_id', 'jockey', 'jockey_id', 'trainer', 'trainer_id', 'sex' are confirmed from theracingapi's own published example scripts (see racing_api.py module docstring for citations). Other fields (or/draw/lbs/going/class/distance_f/type/is_handicap/field_size/sire/dam/damsire/headgear) are best-effort/unverified candidate keys included here only to exercise the adapter's fallback lookup logic, NOT confirmed against a real response. Course/horse/people names are fictitious and prefixed 'Fixture' to make that unmistakable.",
+  "results": [
     {
       "race_id": "fixture-racingapi-race-1",
-      "off_dt": "2026-01-05T14:30:00",
-      "meeting": "Fixture Park",
-      "country": "GB",
+      "off_time": "2026-01-05T14:30:00",
+      "course": "Fixture Park",
+      "region": "GB",
       "race_name": "Fixture Handicap Chase",
-      "race_type": "Handicap Chase",
       "type": "jumps",
-      "surface": "turf",
       "distance_f": 20.0,
       "class": 4,
       "is_handicap": true,
@@ -17,26 +15,30 @@
       "field_size": 2,
       "runners": [
         {
-          "runner_id": "fixture-runner-1",
           "horse_id": "fixture-horse-1",
           "horse": "Fixture Test Horse A",
+          "sex": "G",
           "number": 1,
           "draw": null,
           "or": 128,
           "jockey": "Fixture Jockey A",
+          "jockey_id": "fixture-jockey-1",
           "trainer": "Fixture Trainer A",
+          "trainer_id": "fixture-trainer-1",
           "headgear": null,
           "non_runner": false
         },
         {
-          "runner_id": "fixture-runner-2",
           "horse_id": "fixture-horse-2",
           "horse": "Fixture Test Horse B",
+          "sex": "M",
           "number": 2,
           "draw": null,
           "or": 121,
           "jockey": "Fixture Jockey B",
+          "jockey_id": "fixture-jockey-2",
           "trainer": "Fixture Trainer B",
+          "trainer_id": "fixture-trainer-2",
           "headgear": "CP",
           "non_runner": false
         }
