@@ -1,6 +1,9 @@
 import { getKaggleConnectionStatus } from "@/data/dataSources";
 import { KaggleConnectionCard } from "@/components/settings/KaggleConnectionCard";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 export default async function DataConnectionsPage() {
   const kaggle = await getKaggleConnectionStatus();
 

@@ -4,6 +4,9 @@ import { placeOddsDecimal } from "@/value/place";
 import { selectPlaceBand } from "@/value/placeBands";
 import { ValueScanner, type ValueCandidate } from "@/components/value/ValueScanner";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 export default async function ValueScannerPage() {
   const [candidatesRaw, bookmakers] = await Promise.all([getValueScannerCandidates(), getBookmakers()]);
 

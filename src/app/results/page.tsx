@@ -5,6 +5,9 @@ import { formatDate, formatDistance } from "@/lib/format";
 import { Badge } from "@/components/ui/Badge";
 import { Card, CardBody } from "@/components/ui/Card";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 export default async function ResultsPage() {
   const races = await getResultTrackingRaces();
 

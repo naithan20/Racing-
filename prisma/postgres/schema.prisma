@@ -1,0 +1,1342 @@
+// GENERATED FILE — do not edit directly.
+// Derived from ../schema.prisma by scripts/generate-postgres-schema.mjs.
+// Edit the models/enums in ../schema.prisma (the single source of truth) and re-run
+// `npm run db:generate:postgres` (or `node scripts/generate-postgres-schema.mjs`) to refresh this file.
+
+// RacingEdge — Phase 1 data architecture.
+//
+// This schema deliberately stores raw inputs, market data and calculated
+// features SEPARATELY from any probability model output. No model weighting
+// is encoded here — see FeatureDefinition / Feature for the flexible store
+// that a future model will read from.
+//
+// SQLite is used for local-first development. Field types are chosen to be
+// PostgreSQL-compatible (String/Int/Float/Boolean/DateTime) so migration to
+// Postgres later is a provider swap, not a redesign.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// ENUMS
+// ---------------------------------------------------------------------------
+
+enum FlatJumps {
+  FLAT
+  JUMPS
+}
+
+enum RaceSurface {
+  TURF
+  ALL_WEATHER
+  DIRT
+}
+
+enum HandicapType {
+  HANDICAP
+  NON_HANDICAP
+}
+
+enum RaceStatus {
+  SCHEDULED
+  DELAYED
+  ABANDONED
+  RESULTED
+}
+
+enum ResultStatus {
+  PENDING
+  PROVISIONAL
+  CONFIRMED
+  VOID
+}
+
+enum Sex {
+  COLT
+  FILLY
+  GELDING
+  MARE
+  HORSE
+  RIG
+}
+
+enum SnapshotType {
+  PRE_RACE
+  IN_PLAY
+  POST_RACE_REVIEW
+}
+
+enum EvidenceDensityLabel {
+  VERY_LOW
+  LOW
+  MODERATE
+  HIGH
+  VERY_HIGH
+}
+
+enum PaceRole {
+  LEADER
+  PRONOUNCED_PACE // press the pace / prominent
+  MIDDIVISION
+  HOLD_UP
+  UNKNOWN
+}
+
+enum FeatureValueType {
+  NUMERIC
+  TEXT
+  BOOLEAN
+  CATEGORY
+}
+
+enum FeatureCategory {
+  CURRENT_ABILITY
+  CLASS
+  HANDICAP
+  WEIGHT
+  COURSE
+  DISTANCE
+  GROUND
+  DRAW
+  PACE_POSITION_ACQUISITION
+  PACE_TRANSITION_SPEED
+  PACE_LATE_SUSTAINABILITY
+  PACE_RACE_SHAPE
+  TRAINER_JOCKEY
+  HEADGEAR_EQUIPMENT
+  PEDIGREE
+  EVIDENCE_UNCERTAINTY
+  OTHER
+}
+
+enum ImportSourceType {
+  MANUAL
+  CSV
+  JSON
+  API
+}
+
+enum ImportStatus {
+  PENDING
+  IN_PROGRESS
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum ObservationTagType {
+  EXCELLENT_BREAK
+  SLOW_BREAK
+  LED_CHEAPLY
+  FOUGHT_FOR_LEAD
+  RACED_PROMINENTLY
+  MIDFIELD
+  HELD_UP
+  TRAPPED_WIDE
+  BLOCKED
+  SWITCHED
+  LOST_GROUND_SEEKING_RUN
+  TRAVELLED_STRONGLY
+  UNABLE_TO_MATCH_ACCELERATION
+  STRONG_TRANSITION
+  WEAKENED_FINAL_FURLONG
+  STAYED_ON_STRONGLY
+  PACE_COLLAPSE_BENEFITED
+  PACE_COLLAPSE_HURT
+  BAD_RIDE_POSITIONING
+  RACE_NOT_REPRESENTATIVE
+  CLEAN_TEST_OF_THESIS
+}
+
+enum SelectionType {
+  WIN_VALUE
+  EACH_WAY_VALUE
+  PLACE_PROBABILITY
+  DAILY_VALUE
+  LUCKY_15_LEG
+}
+
+// --- Phase 3A: data infrastructure enums ------------------------------------
+
+// Classification of where a record's DATA (not just its provenance row) came
+// from. Never mix silently — every training/reporting surface must be able
+// to filter or label by this. SAMPLE = Phase 1 hand-built demo data,
+// SYNTHETIC = Phase 2 Plackett-Luce generator output, REAL = genuine
+// historical racing data from a licensed/authorised provider or user import.
+enum DataSourceType {
+  REAL
+  SYNTHETIC
+  SAMPLE
+}
+
+enum EntityType {
+  HORSE
+  TRAINER
+  JOCKEY
+  COURSE
+}
+
+enum EntityResolutionStatus {
+  PENDING
+  RESOLVED
+  REJECTED
+}
+
+enum EntityMatchMethod {
+  PROVIDER_ID
+  EXACT_NORMALIZED_NAME
+  MANUAL_REVIEW
+}
+
+enum LeakageAuditStatus {
+  PASSED
+  FAILED
+}
+
+// --- Phase 3C: £0 free-data strategy enums -----------------------------------
+
+// How trustworthy/clear a record's REUSE RIGHTS are — distinct from
+// DataSourceType (REAL/SYNTHETIC/SAMPLE), which is about data authenticity.
+// A record can be REAL and still RESTRICTED (e.g. scraped-then-shared data
+// with no clear redistribution right) or REAL and VERIFIED_OPEN (an
+// official open dataset with a stated permissive licence).
+//   VERIFIED_OPEN        — licence explicitly confirmed permissive (research/open data licence)
+//   PUBLIC_RESEARCH       — published for public research use, licence terms less explicit
+//   COMMUNITY_UNVERIFIED  — from a community source (e.g. a Kaggle upload) with no licence review done
+//   USER_SUPPLIED         — provided directly by a RacingEdge user, provenance as they describe it
+//   UNKNOWN               — provenance not established; default for anything not explicitly classified
+//   RESTRICTED            — reuse rights are clearly incompatible with this project; excluded by default
+enum ProvenanceStatus {
+  VERIFIED_OPEN
+  PUBLIC_RESEARCH
+  COMMUNITY_UNVERIFIED
+  USER_SUPPLIED
+  UNKNOWN
+  RESTRICTED
+}
+
+// Which feature set a ModelVersion was trained against — see
+// python/racingedge_model/features/registry.py's FEATURE_PROFILES. Free
+// datasets are often missing sectional/positional data and sometimes
+// rating/pedigree fields; a model must state up front which profile (and
+// therefore which fields) it actually used, never silently degrade.
+enum FeatureProfile {
+  CORE_FREE_MODEL
+  ENRICHED_FREE_MODEL
+  FULL_MODEL
+}
+
+// ---------------------------------------------------------------------------
+// RACE
+// ---------------------------------------------------------------------------
+
+model Race {
+  id           String         @id @default(cuid())
+  isSampleData Boolean        @default(false)
+  // Phase 3A: explicit REAL/SYNTHETIC/SAMPLE classification. Kept alongside
+  // isSampleData (not replacing it) for backwards compatibility with Phase
+  // 1/2 code and data. Defaults to SAMPLE to match the historical meaning of
+  // isSampleData=false rows created before this column existed being Phase 2
+  // synthetic data — those rows are backfilled to SYNTHETIC by migration.
+  sourceType   DataSourceType @default(SAMPLE)
+
+  date       DateTime
+  raceTime   String // "14:35" local off-time
+  racecourse String
+  country    String
+
+  raceName         String
+  raceType         String? // e.g. "Maiden", "Handicap Chase", "Novice Hurdle"
+  flatJumps        FlatJumps
+  surface          RaceSurface
+  distanceYards    Int? // canonical distance in yards
+  distanceFurlongs Float
+
+  raceClass    Int? // 1 (highest) - 7 (lowest), UK/IRE style
+  gradeGroup   String? // e.g. "Group 1", "Grade 2", null if unclassified
+  handicapType HandicapType
+
+  ageRestriction String? // e.g. "3yo+", "2yo"
+  sexRestriction String? // e.g. "Fillies & Mares", null if open
+
+  numberOfRunners  Int
+  going            String? // e.g. "Good to Soft"
+  goingDescription String?
+  railPosition     String?
+  stallsPosition   String? // stalls configuration, if known
+
+  weatherSummary     String?
+  temperatureCelsius Float?
+  windSummary        String?
+  precipitationMm    Float?
+
+  prizeMoneyTotal Float?
+  currency        String @default("GBP")
+
+  eachWayFraction Float? // e.g. 0.2, 0.25 — default terms, overridable per bookmaker
+  bookmakerPlaces Int? // default number of places paid, overridable per bookmaker
+  extraPlaceFlag  Boolean @default(false)
+
+  raceStatus   RaceStatus   @default(SCHEDULED)
+  resultStatus ResultStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runners       Runner[]
+  placeTerms    RacePlaceTerms[]
+  importBatch   ImportBatch?     @relation(fields: [importBatchId], references: [id])
+  importBatchId String?
+
+  fieldHistory RaceFieldHistory[]
+
+  @@index([date])
+  @@index([racecourse])
+  @@index([country])
+  @@index([sourceType])
+}
+
+// Bookmaker place terms are race-specific AND bookmaker-specific: the same
+// race can pay 3 places with one bookmaker and 5 (enhanced) with another.
+// "Place probability" must always be computed against one of these rows,
+// never assumed to mean top-3.
+model RacePlaceTerms {
+  id          String    @id @default(cuid())
+  race        Race      @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  raceId      String
+  bookmaker   Bookmaker @relation(fields: [bookmakerId], references: [id])
+  bookmakerId String
+
+  places          Int // e.g. 3, 4, 5
+  eachWayFraction Float // e.g. 1/4, 1/5
+  extraPlaces     Boolean @default(false)
+  terms           String? // free text, e.g. "1-2-3-4-5 if 16+ runners"
+
+  // Phase 3A: this row remains the CURRENT/latest known terms for
+  // (raceId, bookmakerId) — the unique constraint below is unchanged so
+  // every existing query that reads "the" place terms for a bookmaker keeps
+  // working unmodified. effectiveAt records when the current terms became
+  // true. Every prior state (including this one, once superseded) is
+  // logged append-only in RacePlaceTermsHistory — that history table, not
+  // this row, is what point-in-time reconstruction queries against.
+  effectiveAt DateTime @default(now())
+
+  createdAt DateTime @default(now())
+
+  history RacePlaceTermsHistory[]
+
+  @@unique([raceId, bookmakerId])
+}
+
+// ---------------------------------------------------------------------------
+// HORSE
+// ---------------------------------------------------------------------------
+
+model Horse {
+  id           String         @id @default(cuid())
+  isSampleData Boolean        @default(false)
+  sourceType   DataSourceType @default(SAMPLE)
+
+  name        String
+  countryBred String?
+  yearOfBirth Int?
+  sex         Sex?
+
+  sireName    String?
+  damName     String?
+  damsireName String?
+
+  trainerName String?
+  ownerName   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  runners         Runner[]
+  formEntries     FormEntry[]
+  evidenceProfile EvidenceProfile?
+
+  @@index([name])
+  @@index([sourceType])
+}
+
+// ---------------------------------------------------------------------------
+// RUNNER (horse-race combination)
+// ---------------------------------------------------------------------------
+
+model Runner {
+  id           String  @id @default(cuid())
+  isSampleData Boolean @default(false)
+
+  race    Race   @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  raceId  String
+  horse   Horse  @relation(fields: [horseId], references: [id])
+  horseId String
+
+  clothNumber Int?
+  draw        Int?
+
+  ageAtRace      Int?
+  weightStone    Int?
+  weightPounds   Int?
+  weightLbsTotal Int? // total weight carried in lbs, canonical
+
+  officialRating   Int?
+  racingPostRating Int?
+  timeformRating   Int?
+  topspeedRating   Int?
+
+  jockeyName     String?
+  jockeyClaimLbs Int?
+  trainerName    String?
+
+  headgear          String? // e.g. "CP", "B", "V", comma separated codes
+  firstTimeHeadgear Boolean @default(false)
+
+  daysSinceLastRun Int?
+
+  currentOddsDecimal    Float?
+  currentOddsFractional String?
+  openingOddsDecimal    Float?
+  startingPriceDecimal  Float?
+  exchangePriceDecimal  Float?
+
+  nonRunner     Boolean @default(false)
+  favouriteRank Int? // 1 = joint/outright favourite
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  marketPrices        RunnerMarketPrice[]
+  features            Feature[]
+  paceProfile         RunnerPaceProfile?
+  predictionSnapshots PredictionSnapshot[]
+  result              ResultEntry?
+  lucky15Legs         Lucky15Leg[]
+  fieldHistory        RunnerFieldHistory[]
+  sectionalPoints     RunnerSectionalPoint[]
+
+  @@unique([raceId, horseId])
+  @@index([raceId])
+  @@index([horseId])
+}
+
+// ---------------------------------------------------------------------------
+// FORM / PREVIOUS RUN — historic performance record for a horse
+// ---------------------------------------------------------------------------
+
+model FormEntry {
+  id           String  @id @default(cuid())
+  isSampleData Boolean @default(false)
+
+  horse   Horse  @relation(fields: [horseId], references: [id], onDelete: Cascade)
+  horseId String
+
+  // Optionally link to a Race already stored in RacingEdge (if the prior run
+  // is itself in our database). Otherwise the descriptive fields below stand
+  // alone for externally-sourced history.
+  linkedRaceId String?
+
+  raceDate         DateTime
+  course           String
+  country          String?
+  distanceFurlongs Float?
+  going            String?
+  raceClass        Int?
+  flatJumps        FlatJumps?
+  fieldSize        Int?
+
+  finishingPosition     Int? // null if pulled up / unseated / fell etc.
+  finishStatus          String? // "PU", "UR", "F", "BD", "DSQ", "WON", "PLACED", "RAN"
+  beatenDistanceLengths Float?
+  startingPriceDecimal  Float?
+  officialRating        Int?
+  weightPounds          Int?
+  draw                  Int?
+
+  jockeyName String?
+  headgear   String?
+
+  raceComment      String?
+  inRunningComment String?
+
+  earlyPosition   Int? // position early in race
+  halfwayPosition Int?
+  position3fOut   Int?
+  position2fOut   Int?
+  position1fOut   Int?
+
+  sectionalTimes           String? // JSON-encoded array of furlong splits, if available
+  finishingSpeedPercentage Float? // e.g. Topspeed-style late-pace metric
+  paceClassification       String? // e.g. "Led", "Prominent", "Held up"
+  raceStrengthIndex        Float? // strength/quality of the race field, if calculated
+
+  winnerSubsequentPerformance String? // free text / JSON note, filled in later
+  collateralFormNotes         String? // free text / JSON note on collateral form links
+
+  // Phase 3A: positional/sectional data is optional and provider-dependent —
+  // these flags let queries and the data-quality dashboard distinguish
+  // "no in-running data available for this run" from "data available but
+  // every field happened to be null".
+  hasPositionalData Boolean @default(false)
+  hasSectionalData  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([horseId])
+  @@index([raceDate])
+  @@index([course])
+}
+
+// ---------------------------------------------------------------------------
+// MODEL FEATURE STORE
+//
+// Deliberately generic: (runnerId, category, key) -> value. No feature here
+// implies a weighting or a formula. FeatureDefinition documents what each
+// key means and how it is computed so the future model has a stable,
+// self-describing input surface.
+// ---------------------------------------------------------------------------
+
+model FeatureDefinition {
+  key         String           @id // e.g. "course_win_pct", "draw_percentile"
+  category    FeatureCategory
+  label       String
+  description String
+  valueType   FeatureValueType
+  unit        String? // e.g. "%", "lbs", "furlongs"
+  createdAt   DateTime         @default(now())
+
+  features Feature[]
+}
+
+model Feature {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String
+
+  definition FeatureDefinition @relation(fields: [key], references: [key])
+  key        String
+
+  numericValue Float?
+  textValue    String?
+  booleanValue Boolean?
+
+  computedAt   DateTime @default(now())
+  modelVersion String? // tag identifying which future computation produced this
+  sourceNote   String? // provenance, e.g. "derived from FormEntry 2019-2024"
+
+  @@unique([runnerId, key])
+  @@index([runnerId])
+  @@index([key])
+}
+
+// ---------------------------------------------------------------------------
+// EVIDENCE CONFIDENCE
+//
+// Measures how much reliable historical information exists for a horse.
+// This is entirely independent of win probability — a horse can have very
+// high evidence density and a low win probability, or vice versa.
+// ---------------------------------------------------------------------------
+
+model EvidenceProfile {
+  id      String @id @default(cuid())
+  horse   Horse  @relation(fields: [horseId], references: [id], onDelete: Cascade)
+  horseId String @unique
+
+  careerStarts       Int @default(0)
+  startsLast12Months Int @default(0)
+  startsAtCourse     Int @default(0)
+  startsAtDistance   Int @default(0)
+  startsOnGoing      Int @default(0)
+
+  evidenceDensityScore Float? // 0.0 - 1.0, higher = more reliable data
+  evidenceDensityLabel EvidenceDensityLabel?
+  uncertaintyNote      String?
+
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// PACE / RACE SHAPE
+//
+// Three concepts kept strictly separate per horse, for a given runner
+// (race-specific projection, since pace role depends on the field, draw and
+// likely competition for the lead in THIS race):
+//   1. Position acquisition
+//   2. Transition speed
+//   3. Late sustainability
+// ---------------------------------------------------------------------------
+
+model RunnerPaceProfile {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String @unique
+
+  projectedRole PaceRole @default(UNKNOWN)
+
+  // --- 1. Position acquisition ---
+  usualEarlyPosition          Float? // average early-race position historically
+  breaksQuicklyRate           Float? // 0-1, frequency of fast breaks
+  slowStartRate               Float? // 0-1, frequency of slow starts
+  energyToObtainPositionIndex Float? // relative energy cost of achieving preferred position
+
+  // --- 2. Transition speed (3f -> 2f -> 1f acceleration phase) ---
+  positionChange3fTo2f      Float?
+  positionChange2fTo1f      Float?
+  relativeAccelerationIndex Float?
+
+  // --- 3. Late sustainability ---
+  finishingSpeedIndex        Float?
+  positionChangeFinalFurlong Float?
+  weakensLateRate            Float? // 0-1
+  staysOnStronglyRate        Float? // 0-1
+
+  // --- Race-shape context (populated per race, describes the field not just the horse) ---
+  competitionForLeadIndex Float?
+  pacePressureIndex       Float?
+  paceCollapseProbability Float?
+
+  notes     String?
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// MARKET DATA
+// ---------------------------------------------------------------------------
+
+model Bookmaker {
+  id         String   @id @default(cuid())
+  name       String   @unique
+  isExchange Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  marketPrices RunnerMarketPrice[]
+  placeTerms   RacePlaceTerms[]
+}
+
+model RunnerMarketPrice {
+  id          String    @id @default(cuid())
+  runner      Runner    @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId    String
+  bookmaker   Bookmaker @relation(fields: [bookmakerId], references: [id])
+  bookmakerId String
+
+  timestamp       DateTime
+  winOddsDecimal  Float
+  eachWayFraction Float?
+  numberOfPlaces  Int?
+  extraPlaces     Boolean  @default(false)
+
+  // Phase 3A: exchange-style market depth, only ever populated when the
+  // provider is an exchange (e.g. Betfair) and actually reports it. Null for
+  // fixed-odds bookmaker rows.
+  backOddsDecimal Float?
+  layOddsDecimal  Float?
+  availableVolume Float?
+  marketStatus    String? // e.g. "OPEN", "SUSPENDED", "CLOSED" — provider-reported, free text
+
+  isOpeningPrice  Boolean @default(false)
+  isStartingPrice Boolean @default(false)
+  isClosingPrice  Boolean @default(false)
+
+  createdAt DateTime @default(now())
+
+  @@index([runnerId])
+  @@index([bookmakerId])
+  @@index([timestamp])
+}
+
+// ---------------------------------------------------------------------------
+// PREDICTION SNAPSHOT
+//
+// Immutable record of the model's pre-race output. Results must NEVER
+// overwrite these rows — the whole point of RacingEdge is to judge whether
+// the pre-race probability estimate was well-calibrated, not to retrofit
+// a good-looking story after the result is known.
+// ---------------------------------------------------------------------------
+
+model PredictionSnapshot {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String
+
+  snapshotType SnapshotType @default(PRE_RACE)
+  modelVersion String // free-text label, e.g. "unconfigured" during Phase 1 — kept for backwards compatibility, prefer modelVersionRef
+
+  // Phase 2: the trained ModelVersion that produced this snapshot, if any.
+  // Nullable so Phase 1's "unconfigured" rows remain valid.
+  modelVersionRef ModelVersion? @relation(fields: [modelVersionId], references: [id])
+  modelVersionId  String?
+
+  winProbability        Float? // null = "Model not yet configured"
+  placeProbability      Float?
+  placeBasisPlaces      Int? // number of bookmaker places this placeProbability was computed against
+  placeBasisBookmakerId String?
+
+  modelConfidence Float? // 0-1, kept entirely separate from winProbability
+
+  fairOddsDecimal          Float?
+  marketImpliedProbability Float?
+  valueEdgeAbsolute        Float? // winProbability - marketImpliedProbability
+  valueEdgeRelative        Float? // valueEdgeAbsolute / marketImpliedProbability
+
+  referenceOddsDecimal Float? // market odds this snapshot was compared against
+
+  isLocked  Boolean  @default(true) // immutability guard, see lib/results
+  createdAt DateTime @default(now())
+
+  placeProbabilityBands PlaceProbabilityBand[]
+
+  @@index([runnerId])
+  @@index([snapshotType])
+  @@index([modelVersionId])
+}
+
+// ---------------------------------------------------------------------------
+// MODEL VERSIONING (Phase 2)
+//
+// Every trained model — baseline or otherwise — gets its own immutable
+// ModelVersion row. PredictionSnapshot rows reference the ModelVersion that
+// produced them, so predictions from different models/versions can always
+// be told apart and compared. Old versions are never overwritten; retraining
+// creates a new row.
+// ---------------------------------------------------------------------------
+
+model ModelVersion {
+  id      String @id @default(cuid())
+  name    String // e.g. "baseline-logistic-win", "baseline-lightgbm-win", "baseline-place-topN"
+  version String // e.g. "2026.08.13-1"
+
+  featureSetVersion String // matches racingedge_model FEATURE_SET_VERSION at training time
+  algorithm         String // e.g. "logistic_regression", "lightgbm", "place_top2".."place_top6"
+  hyperparameters   String // JSON-encoded
+  calibrationMethod String // "sigmoid" | "isotonic" | "none"
+
+  trainingStartDate   DateTime
+  trainingEndDate     DateTime
+  validationStartDate DateTime?
+  validationEndDate   DateTime?
+  testStartDate       DateTime?
+  testEndDate         DateTime?
+
+  trainingRowCount  Int
+  trainingRaceCount Int
+
+  // Phase 3A: the immutable DatasetVersion this model was trained against,
+  // if trained via the dataset-versioning pipeline. Nullable so Phase 2
+  // ModelVersion rows (trained before DatasetVersion existed) remain valid.
+  datasetVersion   DatasetVersion? @relation(fields: [datasetVersionId], references: [id])
+  datasetVersionId String?
+
+  // True if any race in the training window is synthetic sample data.
+  // Every UI surface must visibly flag predictions from such a model as
+  // SYNTHETIC TEST MODEL — NOT FOR BETTING USE.
+  isSynthetic Boolean @default(false)
+
+  // Phase 3C: which feature set this model actually used. Free datasets
+  // are often missing sectional/positional/pedigree/rating data — this
+  // states plainly which fields a given model relied on rather than
+  // silently degrading. Defaults to FULL_MODEL to match every model
+  // trained before this field existed (Phase 1/2's synthetic dataset has
+  // full feature coverage).
+  featureProfile FeatureProfile @default(FULL_MODEL)
+
+  // Summary metrics captured at training time (JSON) — a point-in-time
+  // record. The live dashboard recomputes metrics fresh from stored
+  // PredictionSnapshot + ResultEntry rows rather than trusting this blob,
+  // but it's kept for quick reference and for models whose snapshots have
+  // since been pruned.
+  metricsJson           String?
+  featureImportanceJson String? // JSON list of {feature, importance/coefficient}
+  artifactPath          String? // path to the saved joblib artifact(s), relative to python/
+  notes                 String?
+
+  createdAt DateTime @default(now())
+
+  predictionSnapshots PredictionSnapshot[]
+  leakageAudits       LeakageAuditRun[]
+
+  @@unique([name, version])
+  @@index([algorithm])
+  @@index([datasetVersionId])
+}
+
+// Raw + calibrated probability of finishing in the top N (N = 2..6),
+// alongside the primary PredictionSnapshot. Storing all five bands (rather
+// than only the one matching a single bookmaker) lets the UI pick the right
+// band for whichever bookmaker's place terms are selected without needing a
+// snapshot per bookmaker, and lets tests verify monotonicity directly.
+model PlaceProbabilityBand {
+  id                   String             @id @default(cuid())
+  snapshot             PredictionSnapshot @relation(fields: [predictionSnapshotId], references: [id], onDelete: Cascade)
+  predictionSnapshotId String
+
+  topN                  Int // 2..6, i.e. P(finish <= topN)
+  probabilityRaw        Float // before calibration
+  probabilityCalibrated Float // after calibration + monotonicity enforcement — this is what the UI should use
+
+  @@unique([predictionSnapshotId, topN])
+}
+
+// ---------------------------------------------------------------------------
+// RESULT TRACKING
+// ---------------------------------------------------------------------------
+
+model ResultEntry {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String @unique
+
+  finishingPosition     Int? // null if non-runner / did not finish
+  finishStatus          String? // "WON", "PLACED", "RAN", "PU", "UR", "F", "BD", "DSQ"
+  beatenDistanceLengths Float?
+  deadHeat              Boolean @default(false) // true if finishingPosition is shared with another runner
+
+  startingPriceDecimal Float?
+  closingOddsDecimal   Float?
+  bspDecimal           Float? // Betfair Starting Price, if available
+
+  placeOutcome           Boolean? // did this runner place, per the PredictionSnapshot's placeBasis
+  profitLossWinStake     Float? // P/L for a 1pt win stake at startingPriceDecimal
+  profitLossEachWayStake Float? // P/L for a 1pt EW stake (2pt total) at startingPriceDecimal
+
+  resultStatus ResultStatus @default(PENDING)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  observations RunnerObservation[]
+}
+
+model RunnerObservation {
+  id       String      @id @default(cuid())
+  result   ResultEntry @relation(fields: [resultId], references: [id], onDelete: Cascade)
+  resultId String
+
+  tag      ObservationTagType?
+  freeText String?
+
+  createdAt DateTime @default(now())
+
+  @@index([resultId])
+}
+
+// ---------------------------------------------------------------------------
+// LUCKY 15 BUILDER (placeholder interface + data structures only)
+// ---------------------------------------------------------------------------
+
+model Lucky15Slip {
+  id        String   @id @default(cuid())
+  name      String?
+  date      DateTime
+  createdAt DateTime @default(now())
+
+  minOddsDecimal     Float?
+  maxOddsDecimal     Float?
+  minConfidence      Float?
+  minPlaceEdge       Float?
+  minRunners         Int?
+  enhancedPlacesOnly Boolean    @default(false)
+  flatJumpsFilter    FlatJumps?
+  countryFilter      String? // comma separated allowed countries
+  bookmakerId        String?
+
+  legs Lucky15Leg[]
+}
+
+model Lucky15Leg {
+  id       String      @id @default(cuid())
+  slip     Lucky15Slip @relation(fields: [slipId], references: [id], onDelete: Cascade)
+  slipId   String
+  runner   Runner      @relation(fields: [runnerId], references: [id])
+  runnerId String
+
+  selectionType SelectionType @default(LUCKY_15_LEG)
+  rationale     String? // rule-based explanation placeholder, no LLM waffle
+  sortOrder     Int           @default(0)
+
+  @@unique([slipId, runnerId])
+}
+
+// ---------------------------------------------------------------------------
+// DATA IMPORT
+// ---------------------------------------------------------------------------
+
+model ImportBatch {
+  id         String           @id @default(cuid())
+  sourceType ImportSourceType
+  filename   String?
+  status     ImportStatus     @default(PENDING)
+
+  rowCount     Int?
+  successCount Int?
+  errorCount   Int?
+  errorLog     String? // JSON-encoded array of row-level errors
+
+  // Phase 3A: streaming/chunked import support for 100k-1M+ row files.
+  totalRows     Int? // total rows detected in the source file, if known up front
+  processedRows Int? // rows processed so far — lets a large import report progress mid-run
+  duplicateRows Int? // rows skipped because they matched an existing record (idempotent re-import)
+  resumeCursor  String? // opaque cursor (e.g. byte offset or row number) to resume a failed/partial import
+
+  // Idempotency: re-running an import with the same key must not create
+  // duplicate rows. Callers compute this (e.g. hash of source file + provider
+  // + date range) and the importer upserts against it rather than blindly
+  // inserting.
+  idempotencyKey String? @unique
+
+  // Which RaceDataProvider/HistoricalResultsProvider/etc. produced this
+  // batch, e.g. "csv", "generic-json", "racing-api", "timeform", "betfair".
+  // Free text (not an enum) so new providers don't require a migration.
+  providerName String?
+
+  datasetVersion   DatasetVersion? @relation(fields: [datasetVersionId], references: [id])
+  datasetVersionId String?
+
+  importedAt DateTime @default(now())
+
+  races             Race[]
+  provenanceRecords DataProvenance[]
+
+  @@index([providerName])
+  @@index([datasetVersionId])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3A: DATA PROVENANCE
+//
+// One row per imported "domain" of data (a race card, an odds snapshot, a
+// result, a sectional feed, a weather reading, ...) tracing exactly where it
+// came from and when. Deliberately polymorphic (entityType + entityId)
+// rather than one FK column per table, so adding a new importable domain
+// never requires a schema migration. rawPayloadHash lets duplicate-detection
+// and auditing work without storing every raw payload verbatim — the goal is
+// traceability, not a full raw-data warehouse.
+// ---------------------------------------------------------------------------
+
+model DataProvenance {
+  id String @id @default(cuid())
+
+  entityType String // e.g. "Race", "Runner", "Horse", "FormEntry", "RunnerMarketPrice", "ResultEntry"
+  entityId   String // id of the row in that table this provenance record describes
+  dataDomain String // e.g. "RACE_CARD", "ODDS", "RESULT", "SECTIONAL", "WEATHER", "PLACE_TERMS"
+
+  provider          String // e.g. "csv", "generic-json", "racing-api", "timeform", "betfair", "betfair-sp-free", "free-dataset:<name>"
+  providerRecordId  String? // the provider's own identifier for this record, if any
+  providerTimestamp DateTime? // when the PROVIDER says this data is/was true (may differ from retrievedAt)
+  retrievedAt       DateTime  @default(now()) // when RacingEdge fetched/imported it
+  effectiveAt       DateTime? // when this data became true in the real world — the point-in-time field
+  sourceVersion     String? // provider API/schema version, dataset release version, etc.
+  rawPayloadHash    String? // SHA-256 of the raw source payload, for dedup/audit without storing the payload
+
+  // Phase 3C: reuse-rights status, independent of DataSourceType (which is
+  // about authenticity, not reuse rights). Defaults to UNKNOWN so nothing
+  // is silently treated as safely reusable — every consumer must actively
+  // check this, see DatasetReview below and DATA_PROVENANCE.md.
+  provenanceStatus ProvenanceStatus @default(UNKNOWN)
+  sourceUrl        String? // the dataset/API's URL, or a user-supplied source label if no URL exists
+
+  importBatch   ImportBatch? @relation(fields: [importBatchId], references: [id])
+  importBatchId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([dataDomain])
+  @@index([provider])
+  @@index([importBatchId])
+  @@index([provenanceStatus])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3C: DATASET REVIEW
+//
+// A human-legible record of what's known/unknown about a dataset's licence
+// and redistribution rights BEFORE it's imported — deliberately not legal
+// advice, just visibility. One row per external dataset/source (not per
+// record — DataProvenance.provenanceStatus is what actually gates
+// per-record usage).
+// ---------------------------------------------------------------------------
+
+model DatasetReview {
+  id String @id @default(cuid())
+
+  datasetName String
+  source      String // e.g. "Kaggle: uk-ireland-horse-racing-results", "promo.betfair.com/betfairsp"
+
+  licenceStated    String? // whatever licence the source itself declares, verbatim if possible
+  licenceUrl       String?
+  originalProvider String? // who the dataset's uploader says the underlying data originally came from
+
+  redistributionPermitted Boolean? // null = not established
+  researchUsePermitted    Boolean?
+  commercialUsePermitted  Boolean?
+
+  provenanceConfidence ProvenanceStatus @default(UNKNOWN)
+  reviewerNotes        String? // free text — deliberately NOT a legal opinion, just observations
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([provenanceConfidence])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3A: POINT-IN-TIME FIELD HISTORY
+//
+// Race and Runner rows hold CURRENT-STATE fields (going, draw, jockey, non-
+// runner status, etc.) that can change between when a race is first carded
+// and off-time. These two generic append-only logs record every prior value
+// so historical reconstruction can answer "what was field X's value as of
+// timestamp T" without needing a dedicated history table per field.
+// ---------------------------------------------------------------------------
+
+model RaceFieldHistory {
+  id     String @id @default(cuid())
+  race   Race   @relation(fields: [raceId], references: [id], onDelete: Cascade)
+  raceId String
+
+  fieldName  String // e.g. "going", "railPosition", "stallsPosition", "weatherSummary"
+  fieldValue String? // stringified value — consumers parse per fieldName's known type
+
+  effectiveAt DateTime // when this value became true
+  source      String? // provider name or "manual"
+
+  importBatchId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([raceId, fieldName, effectiveAt])
+}
+
+model RunnerFieldHistory {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String
+
+  fieldName  String // e.g. "draw", "jockeyName", "trainerName", "weightLbsTotal", "nonRunner", "headgear"
+  fieldValue String? // stringified value — consumers parse per fieldName's known type
+
+  effectiveAt DateTime // when this value became true
+  source      String? // provider name or "manual"
+
+  importBatchId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([runnerId, fieldName, effectiveAt])
+}
+
+// Append-only log of every prior state of a RacePlaceTerms row. The
+// RacePlaceTerms row itself always holds the current/latest terms (so
+// existing single-row-per-bookmaker queries keep working); this table is
+// what point-in-time queries ("what places did bookmaker X pay at 10am")
+// read from instead.
+model RacePlaceTermsHistory {
+  id               String         @id @default(cuid())
+  racePlaceTerms   RacePlaceTerms @relation(fields: [racePlaceTermsId], references: [id], onDelete: Cascade)
+  racePlaceTermsId String
+
+  raceId      String // denormalized for query convenience
+  bookmakerId String // denormalized for query convenience
+
+  places          Int
+  eachWayFraction Float
+  extraPlaces     Boolean @default(false)
+  terms           String?
+
+  effectiveAt  DateTime // when these terms became true
+  supersededAt DateTime? // when a later row replaced these terms (null = still current)
+
+  source        String? // provider name or "manual"
+  importBatchId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([raceId, bookmakerId, effectiveAt])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3A: SECTIONAL / TRACKING DATA (optional, provider-dependent)
+//
+// Granular in-running data — GPS/tracking-derived where available — kept
+// separate from FormEntry's coarser per-race position fields. This is an
+// OPTIONAL adapter target: most providers won't supply it, so nothing else
+// in the schema assumes rows exist here.
+// ---------------------------------------------------------------------------
+
+model RunnerSectionalPoint {
+  id       String @id @default(cuid())
+  runner   Runner @relation(fields: [runnerId], references: [id], onDelete: Cascade)
+  runnerId String
+
+  segmentIndex            Int // 0-based order of this segment within the race
+  segmentDistanceFurlongs Float?
+  segmentTimeSeconds      Float?
+  speedMps                Float?
+  positionInRace          Int?
+  strideLength            Float?
+  strideFrequency         Float?
+  latitude                Float?
+  longitude               Float?
+
+  source        String? // provider name
+  importBatchId String?
+
+  createdAt DateTime @default(now())
+
+  @@index([runnerId, segmentIndex])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3A: ENTITY RESOLUTION
+//
+// Horses/trainers/jockeys/courses arrive from different providers with
+// inconsistent naming (country suffixes, apostrophes, spacing, initials vs
+// full names). We do NOT blindly fuzzy-match: every alias is resolved via
+// provider ID, exact normalized-name match, or an explicit manual-review
+// decision, and every merge is auditable through these two tables.
+// ---------------------------------------------------------------------------
+
+model EntityAlias {
+  id String @id @default(cuid())
+
+  entityType  EntityType
+  canonicalId String // id of the canonical row (Horse.id, or a name string for Trainer/Jockey/Course which have no dedicated table yet)
+
+  rawName        String // exactly as received from the provider
+  normalizedName String // lowercased, punctuation-stripped, whitespace-collapsed form used for matching
+
+  providerName String?
+  providerId   String? // the provider's own entity id, if supplied — the strongest match signal
+
+  matchMethod EntityMatchMethod
+  confidence  Float? // 0-1, only meaningful for non-PROVIDER_ID methods
+
+  createdAt DateTime @default(now())
+
+  @@unique([entityType, providerName, providerId])
+  @@index([entityType, normalizedName])
+  @@index([canonicalId])
+}
+
+model EntityResolutionQueueItem {
+  id String @id @default(cuid())
+
+  entityType     EntityType
+  rawName        String
+  normalizedName String
+  providerName   String?
+
+  // JSON-encoded array of candidate canonical ids + scores the resolver
+  // could not confidently pick between — a human reviews and picks one.
+  candidateCanonicalIdsJson String?
+
+  status              EntityResolutionStatus @default(PENDING)
+  resolvedCanonicalId String?
+  resolvedBy          String? // reviewer identifier, free text
+  resolvedAt          DateTime?
+
+  createdAt DateTime @default(now())
+
+  @@index([entityType, status])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3A: DATASET VERSIONING
+//
+// Every training run must reference an immutable DatasetVersion so results
+// are reproducible and auditable. A DatasetVersion is a frozen description
+// of exactly which data (which providers, which date range, real vs
+// synthetic vs sample) a model was trained/evaluated against — never
+// mutated after creation; a new import or data change creates a new
+// DatasetVersion, not an edit to an old one.
+// ---------------------------------------------------------------------------
+
+model DatasetVersion {
+  id   String @id @default(cuid())
+  name String // human-readable label, e.g. "real-2020-2025-v1"
+
+  // Source classification for the dataset AS A WHOLE. MIXED must never be
+  // silent — any dataset combining REAL with SYNTHETIC/SAMPLE data is
+  // labelled MIXED and every consumer (training commands, UI) must
+  // explicitly opt in before using it as anything other than a research
+  // dataset.
+  sourceType DataSourceType
+
+  providersJson String // JSON-encoded array of provider names contributing to this version
+
+  dateRangeStart DateTime
+  dateRangeEnd   DateTime
+
+  raceCount   Int
+  runnerCount Int
+
+  // JSON blob: missingness %, duplicate rate, unresolved-entity count, etc.
+  // — a frozen snapshot of the data-quality dashboard at creation time.
+  dataQualityMetricsJson String?
+
+  schemaVersion String // Prisma schema / migration name this version was built against
+
+  // Comma-separated or JSON-encoded list of ImportBatch ids included.
+  importBatchIdsJson String?
+
+  notes String?
+
+  createdAt DateTime @default(now())
+
+  modelVersions ModelVersion[]
+  importBatches ImportBatch[]
+  leakageAudits LeakageAuditRun[]
+
+  @@index([sourceType])
+}
+
+// ---------------------------------------------------------------------------
+// PHASE 3A: TEMPORAL LEAKAGE AUDITOR
+//
+// A structured, storable record of a leakage-audit run — the "LEAKAGE AUDIT
+// PASSED / FAILED" report the project requires for every dataset/model
+// before it can be trusted. reportJson holds full per-feature detail (max
+// source timestamp used vs race start time) so a FAILED run is fully
+// explainable, not just a boolean.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Phase 3D: consumer-facing data-source connection UX ("SELECT DATA SOURCE
+// -> CONNECT -> IMPORT"). `sourceId` matches an entry's `id` in the
+// TypeScript-side `SourceCatalog` (src/data/sourceCatalog.ts) — the catalog
+// itself is NOT stored in the database (it's static, versioned config, the
+// same reasoning as the Python feature registry), only the per-source
+// connection/import STATE is.
+// ---------------------------------------------------------------------------
+
+enum ConnectionStatus {
+  NOT_CONNECTED
+  CONNECTED
+  ERROR
+}
+
+enum ImportJobStatus {
+  PENDING
+  DOWNLOADING
+  INSPECTING
+  AWAITING_MAPPING_REVIEW
+  VALIDATING
+  IMPORTING
+  RESOLVING_ENTITIES
+  PROVENANCE_REVIEW
+  LEAKAGE_AUDIT
+  CREATING_DATASET_VERSION
+  GENERATING_QUALITY_REPORT
+  COMPLETED
+  FAILED
+}
+
+// One row per catalog source the user has connected (or attempted to
+// connect). For sources with no authentication step (a plain public URL),
+// "connecting" is a formality that just marks the source as set up — the
+// real gate is whether an import can actually run. Credentials themselves
+// are NEVER stored here or anywhere in the database — see
+// src/actions/dataSources.ts for where they actually live (a server-only,
+// gitignored config file, never sent to the client).
+model DataSourceConnection {
+  id           String           @id @default(cuid())
+  sourceId     String           @unique
+  status       ConnectionStatus @default(NOT_CONNECTED)
+  connectedAt  DateTime?
+  lastSyncAt   DateTime?
+  errorMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  importJobs ImportJob[]
+
+  @@index([sourceId])
+}
+
+// Tracks one run of the full "click Import -> done" pipeline: download (or
+// local file) -> inspect -> propose mapping -> (pause for human review if
+// anything is below high confidence) -> validate -> import -> resolve
+// entities -> provenance review -> leakage audit -> DatasetVersion -> data
+// quality report. Written directly by the Python job runner
+// (racingedge_data.import_pipeline), the same "Python writes SQLite
+// directly, Next.js reads it via Prisma" pattern every other data-layer
+// table in this project uses — there is no separate job queue.
+//
+// `datasetVersionId` / `importBatchId` are plain string references, not
+// Prisma relations — deliberately, matching `DataProvenance.entityId`'s
+// existing polymorphic-reference style, so this table doesn't force a back-
+// relation array onto `DatasetVersion`/`ImportBatch` for what is, from
+// their side, an optional and rarely-queried link.
+model ImportJob {
+  id           String                @id @default(cuid())
+  sourceId     String
+  connection   DataSourceConnection? @relation(fields: [connectionId], references: [id])
+  connectionId String?
+
+  status           ImportJobStatus @default(PENDING)
+  progressPercent  Int             @default(0)
+  currentStepLabel String?
+
+  downloadUrl        String?
+  downloadedFilePath String?
+  mappingFilePath    String?
+  provenanceStatus   String?
+  sourceLabel        String?
+
+  // JSON: {kaggleDatasetRef, sourceType, dateFrom, dateTo} — the run
+  // parameters, persisted so a run PAUSED at AWAITING_MAPPING_REVIEW can
+  // resume from exactly where it left off without the caller re-supplying
+  // them (the mapping-review UI only ever sends the confirmed mapping).
+  paramsJson String?
+
+  datasetVersionId String?
+  importBatchId    String?
+
+  racesImported   Int?
+  runnersImported Int?
+
+  errorMessage String?
+  // JSON array of {ts, step, message} — the full step-by-step audit trail
+  // shown in the import progress UI, kept even after completion.
+  logJson String?
+
+  startedAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  completedAt DateTime?
+
+  @@index([sourceId])
+  @@index([status])
+  @@index([connectionId])
+}
+
+model LeakageAuditRun {
+  id String @id @default(cuid())
+
+  datasetVersion   DatasetVersion? @relation(fields: [datasetVersionId], references: [id])
+  datasetVersionId String?
+
+  modelVersion   ModelVersion? @relation(fields: [modelVersionId], references: [id])
+  modelVersionId String?
+
+  status          LeakageAuditStatus
+  featuresChecked Int
+  violationsFound Int                @default(0)
+
+  // JSON: [{feature, maxSourceTimestamp, raceStartTime, violation: bool, detail}, ...]
+  reportJson String
+
+  createdAt DateTime @default(now())
+
+  @@index([datasetVersionId])
+  @@index([modelVersionId])
+  @@index([status])
+}

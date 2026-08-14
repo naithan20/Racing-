@@ -3,6 +3,9 @@ import Link from "next/link";
 import { getDataSourceCards } from "@/data/dataSources";
 import { SourceCard } from "@/components/data-sources/SourceCard";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 export default async function DataSourcesPage() {
   const cards = await getDataSourceCards();
 

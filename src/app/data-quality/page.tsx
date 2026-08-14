@@ -3,6 +3,9 @@ import { formatDate } from "@/lib/format";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 function MetricTile({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
     <div className="rounded-md border border-border-subtle bg-bg-elevated p-3">

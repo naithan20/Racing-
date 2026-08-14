@@ -5,6 +5,9 @@ import { formatDate, formatDecimalOdds } from "@/lib/format";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Lucky15Builder, type Lucky15Candidate } from "@/components/lucky15/Lucky15Builder";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 export default async function Lucky15Page() {
   const [candidatesRaw, bookmakers, slips] = await Promise.all([
     getLucky15Candidates(),

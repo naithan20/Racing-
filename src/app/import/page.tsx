@@ -4,6 +4,9 @@ import { Badge } from "@/components/ui/Badge";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { CsvImportForm, JsonImportForm } from "@/components/import/ImportForms";
 
+// See src/app/data-explorer/page.tsx for why this is forced dynamic.
+export const dynamic = "force-dynamic";
+
 export default async function ImportPage() {
   const batches = await getImportBatches();
 

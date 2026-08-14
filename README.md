@@ -200,6 +200,139 @@ npm run db:studio           # Prisma Studio, browse the SQLite DB visually
 npm run db:reset              # drop + recreate + reseed (destructive — wipes everything, see above)
 ```
 
+## Deployment (Vercel + Postgres)
+
+RacingEdge can be deployed as a normal, publicly-reachable Next.js app on Vercel's free tier —
+useful for browsing the app (races, dashboard, value scanner, data quality, CSV/JSON import) from
+any device without running a local dev environment. **Read the whole section before deploying**,
+especially "What does NOT work on Vercel" below — the free-data import pipeline (Phase 3D's
+`/data-sources`) and model training are local/dev-only capabilities, not a Vercel limitation to be
+worked around, but a genuine architectural boundary.
+
+### Why not SQLite in production
+
+SQLite is a single local *file*. Vercel serverless functions have an ephemeral, per-invocation
+filesystem — a write from one request is never guaranteed to be visible to the next (a different
+invocation, possibly a different machine, gets a fresh copy of the deployed filesystem). SQLite is
+correct and appropriate for local development (a single, persistent machine) and is unsuitable for
+Vercel's execution model regardless of how the app code is written.
+
+### Why Postgres (Neon), and why this app supports two databases at once
+
+[Neon](https://neon.tech) offers a genuinely free tier (no credit card, generous enough for this
+project: 0.5 GB storage, autosuspend when idle) of serverless Postgres, and Prisma has first-party
+driver-adapter support for it via the plain `pg` (node-postgres) client — both `@prisma/adapter-pg`
+and `pg` are free, open-source npm packages; nothing paid was introduced.
+
+Prisma's `provider` field (`sqlite` vs `postgresql`) is fixed per schema file — it cannot be an
+environment variable — so this repo has **two** schema files with **one** shared source of truth:
+
+- **`prisma/schema.prisma`** — SQLite, hand-maintained, used for local development exactly as
+  before. Nothing about the local dev workflow above changed.
+- **`prisma/postgres/schema.prisma`** — Postgres, **generated, never hand-edited** — derived from
+  `prisma/schema.prisma` by `scripts/generate-postgres-schema.mjs`, which swaps only the
+  `datasource` block. The schema was written in Postgres-compatible types from the very start (see
+  the comment at the top of `schema.prisma`), so no field-level differences exist between the two —
+  editing models always happens in `schema.prisma` only, then re-running `npm run
+  db:generate:postgres` (or the automatic Vercel build step below) regenerates the Postgres file.
+
+`src/database/client.ts` picks the matching driver adapter (`PrismaBetterSqlite3` vs `PrismaPg`) at
+runtime based on whether `DATABASE_URL` starts with `postgres(ql)://` — it always matches whichever
+schema was used to `prisma generate` in that environment, because the generated client
+(`src/generated/prisma`, gitignored, never committed) is regenerated fresh by each environment's own
+build command: `npm run build`/`postinstall` generate the SQLite client locally; `npm run
+vercel-build` (which Vercel runs automatically instead of `build` when the script exists — no
+dashboard configuration needed) generates the Postgres one.
+
+### What does NOT work on Vercel
+
+The **entire Phase 3A–3D real-data pipeline** — `/data-sources` (Connect/Import/Sync), schema
+inspection, the mapping-review UI, Kaggle downloads, `racingedge_data.import_pipeline`, and the
+"Train Baseline Model" action — works by spawning a **local Python virtual environment** as a
+subprocess (`src/lib/pythonRunner.ts`). This is fundamentally incompatible with Vercel's serverless
+Node.js functions, independent of the database choice:
+
+- There is no Python interpreter or virtualenv available in a Vercel serverless function.
+- Serverless functions cannot reliably spawn long-running background processes — the import
+  pipeline (download → inspect → import → leakage audit → …) can run for minutes, far past a
+  serverless function's execution limit, and a detached child process has no guarantee of
+  outliving the parent invocation.
+- The pipeline's file-based working storage (`python/storage/import_jobs/`) requires a persistent
+  local filesystem, which Vercel does not provide.
+
+On a Vercel deployment, clicking **Import**/**Sync**/**Train Baseline Model** will fail cleanly
+with an error (`RACINGEDGE_PYTHON_BIN is not set` or similar) rather than silently doing nothing —
+this is expected, not a bug to fix. These features remain genuinely local/dev-only. Everything
+else — viewing races/results/dashboard/value-scanner/backtest/data-quality/data-explorer pages, and
+CSV/JSON import via `/import` (pure Prisma, no Python involved) — works identically against
+Postgres.
+
+### First-time production database setup
+
+Do this once, before the first deploy (or any time the schema changes and you want production to
+pick it up):
+
+```bash
+DATABASE_URL="<your Neon connection string>" npm run db:push:postgres
+```
+
+`db:push:postgres` regenerates `prisma/postgres/schema.prisma` and pushes it directly to the target
+database (`prisma db push` — schema-first sync, no migration history yet; appropriate for a
+single-environment early-stage deployment). Optionally seed sample data the same way:
+
+```bash
+DATABASE_URL="<your Neon connection string>" npm run db:seed
+```
+
+See "Deploying from scratch" below for the exact account-creation and dashboard steps — those
+require your own Neon/Vercel login, which nothing here can do on your behalf.
+
+### Deploying from scratch
+
+Every step below happens on neon.tech / vercel.com / github.com, using **your own** account —
+nothing here can sign up for an account, click a button, or grant access on your behalf, so this
+is the exact sequence to follow yourself.
+
+1. **Create a free Neon Postgres database.**
+   - Go to [neon.tech](https://neon.tech) → Sign up (free, no card required) → **Create a project**.
+   - Once created, open the project's **Connection Details** / **Dashboard** and copy the
+     connection string (looks like `postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require`).
+
+2. **Push the schema to it** (run this locally, once, with the connection string from step 1):
+   ```bash
+   DATABASE_URL="<paste the Neon connection string>" npm run db:push:postgres
+   ```
+   Optionally seed sample data so the deployed app isn't empty on first load:
+   ```bash
+   DATABASE_URL="<paste the Neon connection string>" npm run db:seed
+   ```
+   (Ask your assistant to run these two commands for you if you'd rather not use a terminal —
+   it only needs the connection string you copied, not your Neon login.)
+
+3. **Import the repo into Vercel.**
+   - Go to [vercel.com](https://vercel.com) → sign in (GitHub sign-in is simplest) → **Add New… →
+     Project**.
+   - Choose **Import Git Repository**, and select this GitHub repo
+     (`naithan20/Racing-`) — grant Vercel access to it if prompted (a GitHub permission screen you
+     approve yourself).
+   - Vercel auto-detects Next.js. Leave the Framework Preset as-is — you do **not** need to
+     manually set a Build Command; this repo's `package.json` has a `vercel-build` script that
+     Vercel picks up automatically.
+
+4. **Set the one required environment variable, before the first deploy.**
+   - In the Vercel project's **Settings → Environment Variables**, add:
+     - `DATABASE_URL` = the same Neon connection string from step 1 (all environments).
+   - Nothing else is required to view the app. See `.env.example` for optional variables (Kaggle,
+     Racing API, FormFav) — none of those matter for basic browsing, and the Kaggle/import/training
+     features won't work on Vercel regardless (see "What does NOT work on Vercel" above).
+
+5. **Deploy.** Click **Deploy**. Vercel builds and gives you a public URL
+   (`https://<project-name>.vercel.app`) — open that on your phone.
+
+6. **Redeploying later**: pushing to the connected branch on GitHub triggers an automatic
+   redeploy. If you change the Prisma schema, re-run step 2's `db:push:postgres` command against
+   the same `DATABASE_URL` so the live database matches before/after the redeploy.
+
 ## Feature engineering (Phase 2)
 
 `python/racingedge_model/features/` computes ~166 features per (runner, race), one module per

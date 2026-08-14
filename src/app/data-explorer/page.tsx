@@ -5,6 +5,12 @@ import { formatDate } from "@/lib/format";
 import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
+// Reads live from the database on every request rather than being frozen
+// at build time — important once the DB is production Postgres (Vercel
+// deploys can't assume the DB is reachable/populated at build time, and a
+// racing app showing build-time-stale data would be actively wrong).
+export const dynamic = "force-dynamic";
+
 export default async function DataExplorerPage() {
   const races = await getExplorerRaces(100);
 

@@ -273,6 +273,17 @@ the full account, `src/data/sourceCatalog.ts` for the source registry, and
 provenance/leakage-audit guarantee described above apply identically regardless of which path (UI
 or CLI) triggers an import.
 
+## Deployment note: this entire pipeline is local/dev-only
+
+Every adapter and importer described above (Racing API, Betfair, the free-dataset importer,
+Kaggle, Phase 3D's `/data-sources` UX) works by running Python against a local database file and,
+for Phase 3D, spawning a local Python virtualenv as a subprocess from Next.js. None of that can run
+on a serverless host like Vercel — there's no Python interpreter, no persistent filesystem for
+working storage, and no support for long-running background processes. This is not a bug or a gap
+to close later; it's a real architectural boundary. See README.md's "Deployment (Vercel +
+Postgres)" section for exactly what does and doesn't work when RacingEdge is deployed, and
+`REAL_FREE_BASELINE.md` for the data-acquisition status this applies to.
+
 ## Licensing reminder
 
 Every commercial racing-data provider has its own licensing terms covering redistribution, storage
