@@ -18,6 +18,18 @@ export default async function DataConnectionsPage() {
           </a>
           . Connection status is shown here; stored credentials themselves are never displayed.
         </p>
+        <p className="mt-2 text-xs text-text-muted">
+          This is an advanced, optional step — the one-tap free setup on{" "}
+          <a href="/data-sources" className="text-accent hover:underline">
+            Data sources
+          </a>{" "}
+          tries Kaggle&apos;s public download anonymously first and only needs this if that&apos;s rejected. The
+          form below writes to a local file and only works in local development. On a deployment (Vercel), set
+          <code className="mx-1 rounded bg-bg-elevated px-1 py-0.5">KAGGLE_USERNAME</code> and
+          <code className="mx-1 rounded bg-bg-elevated px-1 py-0.5">KAGGLE_KEY</code> as environment variables
+          instead, the same way <code className="rounded bg-bg-elevated px-1 py-0.5">DATABASE_URL</code> is
+          configured — RacingEdge never stores credentials in the database.
+        </p>
       </div>
 
       <KaggleConnectionCard connected={kaggle.connected} connectedAt={kaggle.connectedAt} />

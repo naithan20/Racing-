@@ -205,9 +205,11 @@ npm run db:reset              # drop + recreate + reseed (destructive — wipes 
 RacingEdge can be deployed as a normal, publicly-reachable Next.js app on Vercel's free tier —
 useful for browsing the app (races, dashboard, value scanner, data quality, CSV/JSON import) from
 any device without running a local dev environment. **Read the whole section before deploying**,
-especially "What does NOT work on Vercel" below — the free-data import pipeline (Phase 3D's
-`/data-sources`) and model training are local/dev-only capabilities, not a Vercel limitation to be
-worked around, but a genuine architectural boundary.
+especially "What does NOT work on Vercel" below — most of the free-data import pipeline (Phase 3D's
+`/data-sources` advanced/CLI path) and model training are local/dev-only capabilities, not a Vercel
+limitation to be worked around, but a genuine architectural boundary. The exception is the "one-tap
+free setup" card on `/data-sources` (Phase 3E) — it reimplements download/parse/import as plain
+Node code specifically so it works on Vercel; see below for exactly what it does and doesn't cover.
 
 ### Why not SQLite in production
 
@@ -246,11 +248,12 @@ dashboard configuration needed) generates the Postgres one.
 
 ### What does NOT work on Vercel
 
-The **entire Phase 3A–3D real-data pipeline** — `/data-sources` (Connect/Import/Sync), schema
-inspection, the mapping-review UI, Kaggle downloads, `racingedge_data.import_pipeline`, and the
-"Train Baseline Model" action — works by spawning a **local Python virtual environment** as a
-subprocess (`src/lib/pythonRunner.ts`). This is fundamentally incompatible with Vercel's serverless
-Node.js functions, independent of the database choice:
+Most of the **Phase 3A–3D real-data pipeline** — the advanced/CLI side of `/data-sources`
+(Connect/Import/Sync via `SourceCard`'s form), schema inspection, the mapping-review UI for those
+jobs, `racingedge_data.import_pipeline`, and the "Train Baseline Model" action — works by spawning a
+**local Python virtual environment** as a subprocess (`src/lib/pythonRunner.ts`). This is
+fundamentally incompatible with Vercel's serverless Node.js functions, independent of the database
+choice:
 
 - There is no Python interpreter or virtualenv available in a Vercel serverless function.
 - Serverless functions cannot reliably spawn long-running background processes — the import
@@ -260,12 +263,25 @@ Node.js functions, independent of the database choice:
 - The pipeline's file-based working storage (`python/storage/import_jobs/`) requires a persistent
   local filesystem, which Vercel does not provide.
 
-On a Vercel deployment, clicking **Import**/**Sync**/**Train Baseline Model** will fail cleanly
+On a Vercel deployment, clicking that **Import**/**Sync**/**Train Baseline Model** will fail cleanly
 with an error (`RACINGEDGE_PYTHON_BIN is not set` or similar) rather than silently doing nothing —
-this is expected, not a bug to fix. These features remain genuinely local/dev-only. Everything
-else — viewing races/results/dashboard/value-scanner/backtest/data-quality/data-explorer pages, and
-CSV/JSON import via `/import` (pure Prisma, no Python involved) — works identically against
-Postgres.
+this is expected, not a bug to fix. These features remain genuinely local/dev-only.
+
+**The exception (Phase 3E): "one-tap free setup".** The highlighted card at the top of
+`/data-sources` — "Add free historical data" / "Set up free UK/Ireland racing data" — runs a
+separate, Vercel-compatible pipeline (`src/lib/serverlessImport/`) written as plain Node code: it
+downloads over `fetch()`, extracts ZIPs with a small built-in reader (`zlib`, no dependency),
+proposes a column mapping with a heuristic scorer, and writes rows straight to Postgres via Prisma —
+no subprocess, no local filesystem, all within one Server Action request (bounded by
+`maxDuration = 60` — see `src/actions/serverlessImport.ts`). It genuinely works on Vercel. It is
+also genuinely narrower than the CLI pipeline: no entity-resolution review queue beyond simple
+name-based horse dedup, no temporal leakage audit, no `DatasetVersion`/quality report, and a 60MB
+download cap — a dataset too big or a leakage-audited version still needs the CLI path (local dev).
+See `FREE_DATA_SOURCES.md`'s Phase 3E section for the full scope.
+
+Everything else — viewing races/results/dashboard/value-scanner/backtest/data-quality/data-explorer
+pages, and CSV/JSON import via `/import` (pure Prisma, no Python involved) — works identically
+against Postgres.
 
 ### First-time production database setup
 

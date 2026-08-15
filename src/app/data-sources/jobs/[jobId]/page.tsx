@@ -10,6 +10,11 @@ import { Card, CardBody, CardHeader, CardTitle } from "@/components/ui/Card";
 import { JobProgressView } from "@/components/data-sources/JobProgressView";
 import { MappingReviewForm } from "@/components/data-sources/MappingReviewForm";
 
+// Confirming a mapping review for a SERVERLESS_NODE job re-downloads +
+// re-parses the source file synchronously within the confirm action's own
+// request — see src/actions/serverlessImport.ts.
+export const maxDuration = 60;
+
 export default async function ImportJobPage({ params }: PageProps<"/data-sources/jobs/[jobId]">) {
   const { jobId } = await params;
   const job = await getImportJobById(jobId);
@@ -25,7 +30,7 @@ export default async function ImportJobPage({ params }: PageProps<"/data-sources
       </div>
 
       {job.status === "AWAITING_MAPPING_REVIEW" ? (
-        <MappingReviewCard jobId={jobId} />
+        <MappingReviewCard jobId={jobId} runtime={job.runtime} />
       ) : (
         <Card>
           <CardHeader>
@@ -60,7 +65,7 @@ export default async function ImportJobPage({ params }: PageProps<"/data-sources
   );
 }
 
-async function MappingReviewCard({ jobId }: { jobId: string }) {
+async function MappingReviewCard({ jobId, runtime }: { jobId: string; runtime: string }) {
   const data = await getMappingReviewData(jobId);
   const canonicalRoles = listCanonicalRoles();
 
@@ -76,6 +81,7 @@ async function MappingReviewCard({ jobId }: { jobId: string }) {
             columns={data.columnsNeedingReview}
             autoMappedCount={data.autoMappedCount}
             canonicalRoles={canonicalRoles}
+            serverless={runtime === "SERVERLESS_NODE"}
           />
         ) : (
           <p className="text-sm text-text-muted">Mapping data not found for this job.</p>

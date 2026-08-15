@@ -203,6 +203,11 @@ function jobStorageDir(jobId: string): string {
 }
 
 export async function getMappingReviewData(jobId: string): Promise<MappingReviewData | null> {
+  const job = await prisma.importJob.findUnique({ where: { id: jobId }, select: { runtime: true, mappingDataJson: true } });
+  if (job?.runtime === "SERVERLESS_NODE") {
+    return getServerlessMappingReviewData(job.mappingDataJson);
+  }
+
   const dir = jobStorageDir(jobId);
   const mappingPath = path.join(dir, "mapping.json");
   const inspectionPath = path.join(dir, "inspection.json");
@@ -241,4 +246,34 @@ export async function getMappingReviewData(jobId: string): Promise<MappingReview
   }
 
   return { sourcePath: mapping.source_path, columnsNeedingReview, autoMappedCount };
+}
+
+/** SERVERLESS_NODE jobs store their proposed mapping directly on the ImportJob row (mappingDataJson) instead of a file — see src/lib/serverlessImport/pipeline.ts. Single "table" (one CSV), so `table` is a fixed label for display. */
+function getServerlessMappingReviewData(mappingDataJson: string | null): MappingReviewData | null {
+  if (!mappingDataJson) return null;
+  const data = JSON.parse(mappingDataJson) as {
+    columns: { column: string; proposedRole: string | null; confidence: string; sampleValues: string[] }[];
+    resolvedUrl: string;
+  };
+
+  const columnsNeedingReview: MappingReviewColumn[] = [];
+  let autoMappedCount = 0;
+
+  for (const col of data.columns) {
+    if (col.proposedRole === null) continue;
+    if (col.confidence === "high") {
+      autoMappedCount += 1;
+      continue;
+    }
+    columnsNeedingReview.push({
+      table: "csv",
+      column: col.column,
+      proposedRole: col.proposedRole,
+      confidence: col.confidence as MappingReviewColumn["confidence"],
+      confirmed: false,
+      sampleValues: col.sampleValues,
+    });
+  }
+
+  return { sourcePath: data.resolvedUrl, columnsNeedingReview, autoMappedCount };
 }

@@ -98,15 +98,29 @@ export interface SourceCatalogEntry {
 export const SOURCE_CATALOG: SourceCatalogEntry[] = [
   {
     id: "kaggle-uk-ire-historical",
-    name: "UK & Ireland Historical Racing (Kaggle)",
+    name: "UK/Ireland Horse Racing Results 1988–2026",
     description:
-      "Community-published historical UK & Ireland race results dataset on Kaggle — the primary candidate for RacingEdge's free historical training data.",
-    homepage: "https://www.kaggle.com/",
+      "Community-published historical UK & Ireland race results dataset on Kaggle (deltaromeo/horse-racing-results-ukireland-2015-2025) — RacingEdge's curated default for the one-tap free setup flow.",
+    homepage: "https://www.kaggle.com/datasets/deltaromeo/horse-racing-results-ukireland-2015-2025",
     category: "HISTORICAL_RESULTS",
     regions: ["UK", "Ireland"],
     historicalCoverage: "1988–present (unverified — confirm on the dataset's own Kaggle page)",
     codes: ["FLAT", "JUMPS"],
     downloadMechanism: "KAGGLE",
+    // Still "kaggle" because the ADVANCED/CLI import path (SourceCard's
+    // "Import" form -> the Python subprocess pipeline) genuinely always
+    // requires connected credentials — kaggle_adapter.py never attempts an
+    // anonymous request. The separate one-tap serverless path (see the
+    // "One-tap free setup" card on /data-sources, startOneTapImportAction)
+    // does NOT gate on this field — it tries Kaggle's public download
+    // endpoint anonymously first (src/lib/serverlessImport/download.ts)
+    // and only needs Kaggle connected/env-var credentials if that attempt
+    // is actually rejected. Kaggle's own published policy on whether
+    // public dataset downloads require authentication is genuinely
+    // inconsistent across its own documentation, and this build's sandbox
+    // has kaggle.com blocked by network egress policy, so it could not be
+    // confirmed either way from here — see FREE_DATA_SOURCES.md. A real
+    // deployment finds out empirically the first time this runs.
     authMechanism: "kaggle",
     expectedFields: [
       "Race date",
@@ -120,10 +134,16 @@ export const SOURCE_CATALOG: SourceCatalogEntry[] = [
       "Trainer",
     ],
     cost: "FREE",
-    verificationStatus: "REQUIRES_CONNECTION",
+    verificationStatus: "AVAILABLE_BUT_UNVERIFIED",
     adapter: "racingedge_data.providers.kaggle_adapter",
     enabled: true,
-    note: "Requires a Kaggle account connection. Licence varies by uploader — RacingEdge records a DatasetReview before import and never assumes redistribution/commercial rights.",
+    kaggleDatasetRef: "deltaromeo/horse-racing-results-ukireland-2015-2025",
+    note:
+      "One-tap setup tries Kaggle's public download endpoint anonymously first — no account needed if that works. " +
+      "If Kaggle rejects the anonymous request, connect Kaggle in Settings -> Data Connections (local dev) or set " +
+      "KAGGLE_USERNAME/KAGGLE_KEY as environment variables on your deployment (advanced, optional — never required " +
+      "for the one-tap flow). Licence varies by uploader — RacingEdge records a DatasetReview before import and " +
+      "never assumes redistribution/commercial rights.",
   },
   {
     id: "betfair-sp-free-csv",

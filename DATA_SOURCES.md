@@ -273,16 +273,23 @@ the full account, `src/data/sourceCatalog.ts` for the source registry, and
 provenance/leakage-audit guarantee described above apply identically regardless of which path (UI
 or CLI) triggers an import.
 
-## Deployment note: this entire pipeline is local/dev-only
+## Deployment note: the Python pipeline is local/dev-only — with one Phase 3E exception
 
 Every adapter and importer described above (Racing API, Betfair, the free-dataset importer,
-Kaggle, Phase 3D's `/data-sources` UX) works by running Python against a local database file and,
-for Phase 3D, spawning a local Python virtualenv as a subprocess from Next.js. None of that can run
-on a serverless host like Vercel — there's no Python interpreter, no persistent filesystem for
+Kaggle, Phase 3D's `/data-sources` UX advanced path) works by running Python against a local
+database file and spawning a local Python virtualenv as a subprocess from Next.js. None of that can
+run on a serverless host like Vercel — there's no Python interpreter, no persistent filesystem for
 working storage, and no support for long-running background processes. This is not a bug or a gap
 to close later; it's a real architectural boundary. See README.md's "Deployment (Vercel +
 Postgres)" section for exactly what does and doesn't work when RacingEdge is deployed, and
 `REAL_FREE_BASELINE.md` for the data-acquisition status this applies to.
+
+**The exception**: the "one-tap free setup" card on `/data-sources` (Phase 3E,
+`src/lib/serverlessImport/`) reimplements download → CSV parse → column mapping → import as plain
+Node code with no subprocess or filesystem dependency, specifically so at least one real-data path
+works on Vercel. It is deliberately narrower than the Python pipeline above (see
+`FREE_DATA_SOURCES.md`'s Phase 3E section for exactly what it does and doesn't do) — this note isn't
+superseded, it just no longer applies to that one flow.
 
 ## Licensing reminder
 

@@ -16,7 +16,7 @@ verdict means "worth a human fetching this and running it through the inspector/
 | Source | Format | Verdict |
 |---|---|---|
 | Betfair Historical SP data (free CSVs) | CSV / gzip / ZIP | **RECOMMENDED** |
-| Kaggle "UK/Ireland horse racing results" datasets | SQLite / CSV | **RECOMMENDED — pending user download + `DatasetReview`** |
+| Kaggle "UK/Ireland horse racing results" datasets | SQLite / CSV | **RECOMMENDED — one-tap serverless import available, see below** |
 | FormFav API | JSON over HTTP | **USE WITH CAUTION** |
 | Racing Post / Sporting Life / Timeform / At The Races (any scraping route) | — | **REJECTED** |
 
@@ -68,10 +68,13 @@ analysis) via `racingedge_data.value_backtest`, never to a pre-race `PredictionS
 
 ## Kaggle "UK/Ireland horse racing results 1988–2026" (and similar community datasets) — RECOMMENDED, pending user download + `DatasetReview`
 
-- **URL**: `kaggle.com` — the specific dataset was not directly inspected from this environment;
-  `www.kaggle.com` returned `EGRESS_BLOCKED` on every attempt. This entry is therefore a *candidate
-  category*, not a verified specific dataset — see "First target dataset" in `REAL_FREE_BASELINE.md`
-  for the exact boundary this hit.
+- **URL**: `kaggle.com/datasets/deltaromeo/horse-racing-results-ukireland-2015-2025` — a specific
+  dataset (title "Horse Racing results - UK/Ireland 1988-2026"), the curated default for
+  RacingEdge's "One-tap free setup" card on `/data-sources` (see the Phase 3E section below). It was
+  not directly inspected from this environment — `www.kaggle.com` still returns `EGRESS_BLOCKED` on
+  every attempt from this sandbox's network egress policy, so its actual column layout/licence text
+  are still unverified here (a real deployment, which can reach kaggle.com, inspects it for real the
+  first time the one-tap flow runs).
 - **Format**: per Kaggle's usual conventions for this class of dataset, likely SQLite (`.db`) or CSV
   — not confirmed. `racingedge_data.inspector.inspect_file` is deliberately schema-agnostic and
   handles either.
@@ -107,15 +110,55 @@ analysis) via `racingedge_data.value_backtest`, never to a pre-race `PredictionS
 
 Connecting Kaggle no longer requires editing a config file by hand: **Settings → Data Connections
 → Kaggle** in the RacingEdge UI writes the credentials server-side
-(`.data-connections/kaggle.json`, gitignored, mode 600) and never displays them back — see the
-README's "Phase 3D" section.
+(`.data-connections/kaggle.json`, gitignored, mode 600, local development only — see the Phase 3E
+note below for the Vercel-compatible alternative) and never displays them back.
 
-This repository does **not** download Kaggle datasets automatically, even though direct download
-via the Kaggle API/website is often permitted for public datasets — per Phase 3C section 23's
-explicit instruction, automated download is only appropriate when it's unambiguous that doing so is
-permitted, and this build could not even reach `kaggle.com` to check the specific dataset's terms.
-The correct, and only supported, path is: download the file manually, then run
-`npm run data:inspect -- --file <path>`.
+### Phase 3E: does Kaggle actually require authentication to download a PUBLIC dataset?
+
+Genuinely unresolved from this build, and worth stating precisely rather than picking a side:
+
+- One line of Kaggle's own documentation (a "Coming soon: Open access for public dataset downloads
+  with the Kaggle API" announcement) states that, since April 2024, public datasets can be downloaded
+  through the Kaggle **API** without an account or API key — anonymous access applies to API usage,
+  not the website, which still requires login.
+- Other Kaggle community discussions and the wider `kaggle-api` documentation ecosystem state the
+  opposite — that an account/API key is required for any dataset download, full stop.
+- This build's sandbox has `kaggle.com` blocked at the network **egress policy** level (a
+  `403`/`connect_rejected` from the proxy itself, not from Kaggle) — a different kind of block than
+  "this data source doesn't support automated download," and one this build could not test around.
+
+Rather than guess, `src/lib/serverlessImport/download.ts`'s `downloadKaggleDataset` **attempts** an
+anonymous GET against Kaggle's real public download endpoint
+(`https://www.kaggle.com/api/v1/datasets/download/<owner>/<dataset-slug>` — the same endpoint the
+official `kaggle` package itself calls, never scraped HTML) and classifies whatever Kaggle's server
+actually returns: a `401`/`403`/HTML-login-page response is surfaced to the user as "Kaggle requires
+authentication for this dataset," a clean `200` with dataset content is imported straight away. A
+real deployment (which, unlike this sandbox, can reach kaggle.com) finds out the true answer
+empirically the first time someone clicks "Set up free UK/Ireland racing data," and the UI reports
+exactly what happened — never an assumption made in this document.
+
+### Two import paths now exist for this source
+
+1. **One-tap serverless** (`/data-sources`'s "Add free historical data" card, `startOneTapImportAction`
+   → `src/lib/serverlessImport/`) — the primary, phone-friendly path. Runs entirely as Node code
+   inside a Next.js Server Action: tries the anonymous Kaggle download above, falls back to
+   `KAGGLE_USERNAME`/`KAGGLE_KEY` environment variables if set, extracts the ZIP Kaggle's endpoint
+   always returns (a small dependency-free reader, `src/lib/serverlessImport/zip.ts`), maps columns
+   with a heuristic confidence scorer, pauses for a browser mapping-review step only if needed, then
+   writes Race/Runner/ResultEntry/DataProvenance rows directly via Prisma. Works identically on
+   Vercel and locally — this is the actual point of it (see README.md's Deployment section).
+   Deliberately narrower than the CLI pipeline below: no entity-resolution review queue beyond simple
+   name-based horse dedup, no temporal leakage audit, no `DatasetVersion`/bias report. Bounded to a
+   60MB download and ~60s of wall-clock time per request (`MAX_DOWNLOAD_BYTES`,
+   `src/actions/serverlessImport.ts`'s `maxDuration`) — a dataset too large for that limit gets a
+   clear error pointing at path 2, never a silent partial import.
+2. **CLI / advanced** (`SourceCard`'s "Import" form on the same page, `racingedge_data.import_pipeline`,
+   spawned as a Python subprocess) — the original Phase 3D pipeline: full schema inspection, entity
+   resolution queue, temporal leakage audit, `DatasetVersion` + quality report. Requires a local
+   Python environment (`RACINGEDGE_PYTHON_BIN`), so it only runs in local development, never on
+   Vercel. Kaggle credentials for this path still go through Settings → Data Connections' file-based
+   flow, since the Python `kaggle` package always requires them (it never attempts anonymous access —
+   only the TypeScript path above does).
 
 ---
 
@@ -167,9 +210,36 @@ backend from `WebFetch` in this environment) surfaced general awareness of the f
 described above, but did not substitute for actually reaching a site's documentation or terms page
 — nothing is listed here as RECOMMENDED on the strength of a search snippet alone.
 
+**Phase 3E search for a genuinely no-account-required alternative to Kaggle/Betfair** (the user
+explicitly asked for one, in this preference order: clearly licensed/open → official/public →
+community with clear provenance → user-supplied URL fallback):
+
+- **No official/public option exists.** Neither `data.gov.uk` nor the British Horseracing Authority
+  publish a downloadable bulk historical-results dataset or open API — the BHA's own statistics pages
+  are aggregate reports (field sizes, prize money totals), not race/runner-level data.
+- `racingformbook.com` and `flatstats.co.uk` both offer free CSV racing-results downloads, but both
+  require account registration before downloading — the same "requires connection" tier as Kaggle,
+  not a genuine improvement, and both domains returned `EGRESS_BLOCKED` from this sandbox so their
+  exact terms could not be inspected directly.
+- Community GitHub scrapers exist (e.g. `adamcorren/horse_racing_data_analyzer`) but ship code, not
+  data — using one would mean running a scraper against a commercial racing site, which Phase 3C's
+  own instruction above already forbids regardless of source.
+- **Conclusion**: the named Kaggle dataset (community, provenance-labelled `COMMUNITY_UNVERIFIED` by
+  default) plus the already-cataloged free Betfair SP CSVs remain the best available £0, no-forced-
+  account options. The "one-tap" pipeline's anonymous-first Kaggle attempt (above) is the closest
+  this build can get to "official/public" ergonomics without an official/public source actually
+  existing.
+
 ## Summary for a maintainer
 
-To make real progress on Phase 3C at £0 cost:
+**Easiest path (Phase 3E, works on Vercel and on your phone):** open `/data-sources`, tap "Set up
+free UK/Ireland racing data" on the one-tap card. RacingEdge downloads, extracts, maps columns, and
+imports server-side — no terminal, no file leaving Kaggle's servers to your device. See the "Two
+import paths now exist for this source" note above for exactly what this does and doesn't do
+(no leakage audit, no `DatasetVersion` — CLI-only for those).
+
+**Advanced/CLI path**, for the full pipeline (entity resolution, leakage audit, `DatasetVersion`) or
+a dataset too large for the one-tap size/time limits:
 
 1. **Download** a UK/Ireland historical racing dataset from Kaggle (or an equivalent community
    source) manually, and provide the local file path.

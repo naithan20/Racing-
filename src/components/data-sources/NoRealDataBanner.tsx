@@ -14,7 +14,7 @@ export function NoRealDataBanner() {
         href="/data-sources"
         className="shrink-0 rounded-md bg-accent px-4 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90"
       >
-        Add Free Racing Data
+        Add Free Historical Data
       </Link>
     </div>
   );

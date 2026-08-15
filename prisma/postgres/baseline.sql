@@ -73,6 +73,9 @@ CREATE TYPE "ConnectionStatus" AS ENUM ('NOT_CONNECTED', 'CONNECTED', 'ERROR');
 -- CreateEnum
 CREATE TYPE "ImportJobStatus" AS ENUM ('PENDING', 'DOWNLOADING', 'INSPECTING', 'AWAITING_MAPPING_REVIEW', 'VALIDATING', 'IMPORTING', 'RESOLVING_ENTITIES', 'PROVENANCE_REVIEW', 'LEAKAGE_AUDIT', 'CREATING_DATASET_VERSION', 'GENERATING_QUALITY_REPORT', 'COMPLETED', 'FAILED');
 
+-- CreateEnum
+CREATE TYPE "ImportJobRuntime" AS ENUM ('PYTHON_CLI', 'SERVERLESS_NODE');
+
 -- CreateTable
 CREATE TABLE "Race" (
     "id" TEXT NOT NULL,
@@ -658,11 +661,13 @@ CREATE TABLE "ImportJob" (
     "sourceId" TEXT NOT NULL,
     "connectionId" TEXT,
     "status" "ImportJobStatus" NOT NULL DEFAULT 'PENDING',
+    "runtime" "ImportJobRuntime" NOT NULL DEFAULT 'PYTHON_CLI',
     "progressPercent" INTEGER NOT NULL DEFAULT 0,
     "currentStepLabel" TEXT,
     "downloadUrl" TEXT,
     "downloadedFilePath" TEXT,
     "mappingFilePath" TEXT,
+    "mappingDataJson" TEXT,
     "provenanceStatus" TEXT,
     "sourceLabel" TEXT,
     "paramsJson" TEXT,

@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 
 import { confirmMappingAction, type MappingUpdate } from "@/actions/dataSources";
+import { confirmOneTapMappingAction } from "@/actions/serverlessImport";
 import type { MappingReviewColumn } from "@/data/dataSources";
 
 export function MappingReviewForm({
@@ -11,11 +12,14 @@ export function MappingReviewForm({
   columns,
   autoMappedCount,
   canonicalRoles,
+  serverless = false,
 }: {
   jobId: string;
   columns: MappingReviewColumn[];
   autoMappedCount: number;
   canonicalRoles: readonly string[];
+  /** SERVERLESS_NODE jobs confirm through confirmOneTapMappingAction (re-downloads + re-parses in-request) instead of confirmMappingAction (patches a file for the detached Python subprocess to pick up). */
+  serverless?: boolean;
 }) {
   const router = useRouter();
   const [selections, setSelections] = useState<Record<string, string>>(() =>
@@ -35,7 +39,7 @@ export function MappingReviewForm({
       updates[key] = { role: role === "" ? null : role, confirmed: role !== "" };
     }
     startTransition(async () => {
-      const result = await confirmMappingAction(jobId, updates);
+      const result = serverless ? await confirmOneTapMappingAction(jobId, updates) : await confirmMappingAction(jobId, updates);
       if (result.ok) {
         router.push(`/data-sources/jobs/${jobId}`);
         router.refresh();

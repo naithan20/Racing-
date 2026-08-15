@@ -1234,6 +1234,26 @@ enum ImportJobStatus {
   FAILED
 }
 
+// Which pipeline actually ran this job. PYTHON_CLI is the original Phase 3D
+// pipeline (racingedge_data.import_pipeline, spawned as a subprocess) — full
+// step coverage (entity resolution queue, leakage audit, DatasetVersion,
+// quality report) but requires a local Python environment, so it cannot run
+// on Vercel. SERVERLESS_NODE is the "one-tap free setup" pipeline added to
+// make free-source import work on Vercel (see src/lib/serverlessImport/) —
+// download -> extract -> parse -> map -> import all run as plain Node code
+// with no subprocess/filesystem dependency, but deliberately do NOT create
+// a DatasetVersion, run the temporal leakage auditor, or populate the
+// entity-resolution review queue; it writes Race/Runner/DataProvenance rows
+// directly and stops there. Both write the same ImportJob/Race/Runner
+// tables, so the rest of the app (Data Quality dashboard, /data-explorer)
+// doesn't need to know which one ran — only "Train Baseline Model" and the
+// dataset-version-gated pages care, and they already handle a missing
+// DatasetVersion by saying so rather than assuming one exists.
+enum ImportJobRuntime {
+  PYTHON_CLI
+  SERVERLESS_NODE
+}
+
 // One row per catalog source the user has connected (or attempted to
 // connect). For sources with no authentication step (a plain public URL),
 // "connecting" is a formality that just marks the source as set up — the
@@ -1277,13 +1297,20 @@ model ImportJob {
   connection   DataSourceConnection? @relation(fields: [connectionId], references: [id])
   connectionId String?
 
-  status           ImportJobStatus @default(PENDING)
-  progressPercent  Int             @default(0)
+  status           ImportJobStatus  @default(PENDING)
+  runtime          ImportJobRuntime @default(PYTHON_CLI)
+  progressPercent  Int              @default(0)
   currentStepLabel String?
 
   downloadUrl        String?
   downloadedFilePath String?
   mappingFilePath    String?
+  // SERVERLESS_NODE jobs only: the proposed column mapping (+ small sample
+  // values for the review UI) as JSON, stored in the row instead of a file
+  // — Vercel serverless functions have no persistent filesystem between
+  // invocations, so this replaces mappingFilePath for this runtime. See
+  // src/lib/serverlessImport/mapping.ts for the shape written here.
+  mappingDataJson    String?
   provenanceStatus   String?
   sourceLabel        String?
 
